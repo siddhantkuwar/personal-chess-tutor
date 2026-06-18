@@ -7,7 +7,7 @@ __pycache__/
 
 # Build outputs
 dist/
-build/
+build*/
 *.o
 *.a
 *.so
@@ -31,5 +31,8 @@ npm-debug.log*
 # OS
 Thumbs.db
 
-# Documentation
-docs/
+# Runtime data
+data/
+
+# Generated frontend assets copied into the C++ bundle
+web/dist/
