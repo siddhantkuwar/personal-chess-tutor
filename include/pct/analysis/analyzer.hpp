@@ -8,7 +8,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -119,14 +118,14 @@ class Analyzer {
     Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, AnalyzerOptions options = {});
 
     [[nodiscard]] GameAnalysis analyze(const chess::Game& game, ProgressCallback progress = {},
-                                       std::stop_token stop_token = {});
+                                       CancellationToken stop_token = {});
     [[nodiscard]] GameAnalysis analyze_shallow(const chess::Game& game,
                                                ProgressCallback progress = {},
-                                               std::stop_token stop_token = {});
+                                               CancellationToken stop_token = {});
     [[nodiscard]] GameAnalysis analyze_deep(const chess::Game& game,
                                             GameAnalysis shallow_analysis,
                                             ProgressCallback progress = {},
-                                            std::stop_token stop_token = {});
+                                            CancellationToken stop_token = {});
     [[nodiscard]] static GamePhase classify_phase(const chess::Board& board, std::size_t ply);
     [[nodiscard]] std::size_t cache_hits() const { return cache_.hit_count(); }
 
@@ -136,7 +135,7 @@ class Analyzer {
     AnalyzerOptions options_;
 
     [[nodiscard]] engine::AnalysisResult analyze_cached(const engine::AnalysisRequest& request,
-                                                        std::stop_token stop_token);
+                                                        CancellationToken stop_token);
 };
 
 [[nodiscard]] std::string_view name(AnalysisStage stage);

@@ -12,7 +12,7 @@ namespace {
 class Phase2Engine final : public engine::AnalysisEngine {
   public:
     engine::AnalysisResult analyze(const engine::AnalysisRequest& request,
-                                   std::stop_token) override {
+                                   CancellationToken) override {
         chess::Board board = chess::Board::from_fen(request.fen);
         const auto moves = board.legal_moves();
         const std::string best = moves.empty() ? "(none)" : chess::uci(moves.front());

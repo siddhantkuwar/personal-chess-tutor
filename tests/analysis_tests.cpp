@@ -9,7 +9,7 @@ namespace {
 class TacticalEngine final : public engine::AnalysisEngine {
   public:
     engine::AnalysisResult analyze(const engine::AnalysisRequest& request,
-                                   std::stop_token) override {
+                                   CancellationToken) override {
         chess::Board board = chess::Board::from_fen(request.fen);
         engine::AnalysisResult result;
         int score = 0;

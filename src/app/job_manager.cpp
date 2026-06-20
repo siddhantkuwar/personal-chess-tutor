@@ -27,12 +27,14 @@ JobManager::JobManager(Repository& repository, analysis::Analyzer& analyzer)
     : repository_(repository), analyzer_(analyzer), paused_(repository.background_paused()) {
     for (const auto& game_id : repository_.recoverable_analysis_jobs())
         static_cast<void>(start(game_id));
-    worker_ = std::jthread([this](std::stop_token token) { work(token); });
+    worker_ = std::thread([this] { work(worker_cancellation_.get_token()); });
 }
 
 JobManager::~JobManager() {
-    worker_.request_stop();
+    worker_cancellation_.request_stop();
     condition_.notify_all();
+    if (worker_.joinable())
+        worker_.join();
 }
 
 AnalysisJob JobManager::start(std::string game_id) {
@@ -184,12 +186,14 @@ void JobManager::notify(const AnalysisJob& job) {
         observer(job);
 }
 
-void JobManager::work(std::stop_token stop_token) {
+void JobManager::work(CancellationToken stop_token) {
     while (!stop_token.stop_requested()) {
         Task task;
         {
             std::unique_lock lock(mutex_);
-            condition_.wait(lock, stop_token, [&] { return !paused_ && !queue_.empty(); });
+            condition_.wait(lock, [&] {
+                return stop_token.stop_requested() || (!paused_ && !queue_.empty());
+            });
             if (stop_token.stop_requested())
                 return;
             task = queue_.front();

@@ -16,7 +16,7 @@ namespace {
 class QuietEngine final : public engine::AnalysisEngine {
   public:
     engine::AnalysisResult analyze(const engine::AnalysisRequest& request,
-                                   std::stop_token) override {
+                                   CancellationToken) override {
         chess::Board board = chess::Board::from_fen(request.fen);
         const auto moves = board.legal_moves();
         const std::string best = moves.empty() ? "(none)" : chess::uci(moves.front());
@@ -32,7 +32,7 @@ class StagedEngine final : public engine::AnalysisEngine {
     std::atomic<bool> allow_deep{false};
 
     engine::AnalysisResult analyze(const engine::AnalysisRequest& request,
-                                   std::stop_token stop_token) override {
+                                   CancellationToken stop_token) override {
         {
             std::lock_guard lock(mutex_);
             depths_.push_back(request.depth);

@@ -10,7 +10,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,7 +24,7 @@ struct AnalysisJob {
     JobStatus status{JobStatus::Queued};
     analysis::Progress progress;
     std::string error;
-    std::stop_source cancellation;
+    CancellationSource cancellation;
 };
 
 using JobObserver = std::function<void(const AnalysisJob&)>;
@@ -63,10 +62,11 @@ class JobManager {
     std::deque<Task> queue_;
     std::uint64_t next_id_{1};
     JobObserver observer_;
-    std::jthread worker_;
+    std::thread worker_;
+    CancellationSource worker_cancellation_;
     bool paused_{false};
 
-    void work(std::stop_token stop_token);
+    void work(CancellationToken stop_token);
     void notify(const AnalysisJob& job);
 };
 

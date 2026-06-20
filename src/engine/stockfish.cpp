@@ -164,7 +164,7 @@ void Stockfish::send(std::string_view command) {
 }
 
 std::string Stockfish::read_line(std::chrono::steady_clock::time_point deadline,
-                                 std::stop_token stop_token) {
+                                 CancellationToken stop_token) {
     while (true) {
         if (const std::size_t newline = read_buffer_.find('\n'); newline != std::string::npos) {
             std::string line = read_buffer_.substr(0, newline);
@@ -252,7 +252,7 @@ std::optional<PrincipalVariation> Stockfish::parse_info_line(std::string_view li
     return has_score ? std::optional(result) : std::nullopt;
 }
 
-AnalysisResult Stockfish::analyze(const AnalysisRequest& request, std::stop_token stop_token) {
+AnalysisResult Stockfish::analyze(const AnalysisRequest& request, CancellationToken stop_token) {
     if (request.fen.empty() || request.multipv < 1 || request.multipv > 10 ||
         (request.depth < 1 && request.move_time.count() <= 0)) {
         throw Error(ErrorCode::InvalidArgument, "invalid Stockfish analysis request");

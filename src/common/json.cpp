@@ -2,10 +2,10 @@
 
 #include "pct/common/error.hpp"
 
-#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <locale>
 #include <sstream>
 
 namespace pct::json {
@@ -199,8 +199,11 @@ class Parser {
         }
         double value = 0;
         const auto text = input_.substr(start, offset_ - start);
-        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
+        std::istringstream stream(std::string{text});
+        stream.imbue(std::locale::classic());
+        stream >> value;
+        if (stream.fail() || stream.rdbuf()->sgetc() != std::char_traits<char>::eof() ||
+            !std::isfinite(value)) {
             fail("number is outside the supported range");
         }
         return Value(value);

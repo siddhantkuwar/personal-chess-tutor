@@ -23,6 +23,15 @@ TEST_CASE("JSON dump round trips strings and arrays") {
     CHECK_EQ(decoded.at("values").as_array().size(), 3ULL);
 }
 
+TEST_CASE("JSON parser reads decimal and exponent numbers") {
+    const Value parsed = parse("[0.5,-12.25,6.02e2]");
+    const auto& values = parsed.as_array();
+    CHECK_EQ(values[0].as_number(), 0.5);
+    CHECK_EQ(values[1].as_number(), -12.25);
+    CHECK_EQ(values[2].as_number(), 602.0);
+    CHECK_THROWS(parse("1e9999"));
+}
+
 TEST_CASE("JSON parser rejects malformed and duplicate data") {
     CHECK_THROWS(parse("{\"a\":1,}"));
     CHECK_THROWS(parse("{\"a\":1,\"a\":2}"));

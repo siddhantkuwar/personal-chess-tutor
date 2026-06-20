@@ -1,9 +1,10 @@
 #pragma once
 
+#include "pct/common/cancellation.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,7 +45,7 @@ class AnalysisEngine {
   public:
     virtual ~AnalysisEngine() = default;
     [[nodiscard]] virtual AnalysisResult analyze(const AnalysisRequest& request,
-                                                 std::stop_token stop_token = {}) = 0;
+                                                 CancellationToken stop_token = {}) = 0;
 };
 
 class Stockfish : public AnalysisEngine {
@@ -62,7 +63,7 @@ class Stockfish : public AnalysisEngine {
     void restart();
     [[nodiscard]] bool running() const noexcept;
     [[nodiscard]] AnalysisResult analyze(const AnalysisRequest& request,
-                                         std::stop_token stop_token = {}) override;
+                                         CancellationToken stop_token = {}) override;
 
     [[nodiscard]] static std::optional<PrincipalVariation> parse_info_line(std::string_view line);
 
@@ -75,7 +76,7 @@ class Stockfish : public AnalysisEngine {
 
     void send(std::string_view command);
     [[nodiscard]] std::string read_line(std::chrono::steady_clock::time_point deadline,
-                                        std::stop_token stop_token = {});
+                                        CancellationToken stop_token = {});
     void wait_for(std::string_view token, std::chrono::milliseconds timeout);
 };
 

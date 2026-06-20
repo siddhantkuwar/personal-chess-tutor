@@ -460,7 +460,7 @@ Analyzer::Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, Analyze
     : engine_(engine), cache_(cache), options_(options) {}
 
 engine::AnalysisResult Analyzer::analyze_cached(const engine::AnalysisRequest& request,
-                                                std::stop_token stop_token) {
+                                                CancellationToken stop_token) {
     engine::AnalysisResult result;
     if (cache_.get(request, result))
         return result;
@@ -514,7 +514,7 @@ GamePhase Analyzer::classify_phase(const chess::Board& board, std::size_t ply) {
 }
 
 GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback progress,
-                                       std::stop_token stop_token) {
+                                       CancellationToken stop_token) {
     if (game.plies.empty())
         throw Error(ErrorCode::InvalidArgument, "cannot analyze an empty game");
     const auto report = [&](AnalysisStage stage, std::size_t complete, std::size_t total,
@@ -575,7 +575,7 @@ GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback
 }
 
 GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analysis,
-                                    ProgressCallback progress, std::stop_token stop_token) {
+                                    ProgressCallback progress, CancellationToken stop_token) {
     if (analysis.game_id != game.identity || analysis.moves.size() != game.plies.size())
         throw Error(ErrorCode::InvalidArgument,
                     "shallow analysis does not match the requested game");
@@ -668,7 +668,7 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
 }
 
 GameAnalysis Analyzer::analyze(const chess::Game& game, ProgressCallback progress,
-                               std::stop_token stop_token) {
+                               CancellationToken stop_token) {
     GameAnalysis shallow = analyze_shallow(game, progress, stop_token);
     return analyze_deep(game, std::move(shallow), progress, stop_token);
 }
