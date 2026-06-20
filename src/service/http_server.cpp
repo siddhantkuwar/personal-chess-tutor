@@ -15,6 +15,7 @@
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -29,11 +30,41 @@ namespace {
 constexpr std::size_t max_header_size = 64 * 1024;
 constexpr std::size_t max_body_size = 10 * 1024 * 1024;
 
+std::int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 std::string lowercase(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
         return static_cast<char>(std::tolower(character));
     });
     return value;
+}
+
+std::string percent_decode(std::string_view value) {
+    std::string result;
+    result.reserve(value.size());
+    const auto hex = [](char character) -> int {
+        if (character >= '0' && character <= '9') return character - '0';
+        if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+        if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+        return -1;
+    };
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (value[index] == '%' && index + 2 < value.size()) {
+            const int high = hex(value[index + 1]);
+            const int low = hex(value[index + 2]);
+            if (high < 0 || low < 0)
+                throw Error(ErrorCode::InvalidArgument, "path contains invalid percent encoding");
+            result.push_back(static_cast<char>((high << 4) | low));
+            index += 2;
+        } else {
+            result.push_back(value[index]);
+        }
+    }
+    return result;
 }
 
 std::vector<std::string> path_parts(std::string_view path) {
@@ -47,7 +78,7 @@ std::vector<std::string> path_parts(std::string_view path) {
         if (offset >= path.size())
             break;
         const std::size_t end = path.find('/', offset);
-        result.emplace_back(path.substr(offset, end - offset));
+        result.push_back(percent_decode(path.substr(offset, end - offset)));
         if (end == std::string_view::npos)
             break;
         offset = end + 1;
@@ -344,6 +375,73 @@ Response Api::handle(const Request& request) {
                                           {"storage", "append_only_event_log"},
                                       });
         }
+        if (parts == std::vector<std::string>{"api", "drills"} && request.method == "GET") {
+            const auto current = now_ms();
+            const auto drills = repository_.drills(current);
+            std::map<std::string, std::size_t> frequency;
+            for (const auto& drill : drills)
+                ++frequency[drill.category];
+            json::Value::Array values;
+            for (const auto& drill : drills)
+                values.push_back(training::to_json(drill, current, frequency[drill.category]));
+            return json_response(200, json::Value::Object{{"drills", std::move(values)}});
+        }
+        if (parts.size() >= 3 && parts[0] == "api" && parts[1] == "drills") {
+            const auto drill = repository_.drill(parts[2]);
+            if (!drill)
+                throw Error(ErrorCode::NotFound, "drill does not exist");
+            if (parts.size() == 3 && request.method == "GET")
+                return json_response(200, training::to_json(*drill, now_ms()));
+            if (parts.size() == 4 && parts[3] == "session" && request.method == "POST") {
+                return json_response(
+                    200, training::to_json(repository_.begin_drill_session(parts[2], now_ms()),
+                                            now_ms()));
+            }
+            if (parts.size() == 4 && parts[3] == "hint" && request.method == "POST") {
+                return json_response(
+                    200, training::to_json(repository_.advance_hint(parts[2], now_ms()),
+                                            now_ms()));
+            }
+            if (parts.size() == 4 && parts[3] == "attempt" && request.method == "POST") {
+                const json::Value body = json::parse(request.body);
+                const auto attempt = repository_.record_attempt(
+                    parts[2], body.at("move").as_string(),
+                    static_cast<std::uint64_t>(body.get("response_time_ms", 0).as_number()),
+                    body.get("hint_level", 0).as_int(), now_ms());
+                const auto updated = repository_.drill(parts[2]);
+                return json_response(200, json::Value::Object{
+                                              {"attempt", training::to_json(attempt)},
+                                              {"drill", training::to_json(*updated, now_ms())},
+                                          });
+            }
+        }
+        if (parts == std::vector<std::string>{"api", "profile"} && request.method == "GET")
+            return json_response(200, training::to_json(repository_.profile()));
+        if (parts == std::vector<std::string>{"api", "storage", "snapshot"} &&
+            request.method == "POST") {
+            const auto path = repository_.create_snapshot();
+            return json_response(200, json::Value::Object{{"created", true},
+                                                           {"snapshot", path.filename().string()}});
+        }
+        if (parts == std::vector<std::string>{"api", "storage", "compact"} &&
+            request.method == "POST") {
+            return json_response(200, json::Value::Object{
+                                          {"compacted", true},
+                                          {"events", repository_.compact_storage()},
+                                      });
+        }
+        if (parts == std::vector<std::string>{"api", "resources"} && request.method == "GET") {
+            json::Value::Array resources;
+            for (const auto& recommendation : repository_.recommendations())
+                resources.push_back(training::to_json(recommendation));
+            return json_response(200, json::Value::Object{{"resources", std::move(resources)}});
+        }
+        if (parts.size() == 4 && parts[0] == "api" && parts[1] == "resources" &&
+            parts[3] == "complete" && request.method == "POST") {
+            repository_.complete_resource(parts[2], now_ms());
+            return json_response(200, json::Value::Object{{"completed", true},
+                                                           {"resource_id", parts[2]}});
+        }
         if (parts == std::vector<std::string>{"api", "import"} && request.method == "POST") {
             const json::Value body = json::parse(request.body);
             import::ImportedGame imported;
@@ -362,6 +460,73 @@ Response Api::handle(const Request& request) {
                                      {"game_id", imported.game.identity},
                                      {"job", app::to_json(job)},
                                  });
+        }
+        if (parts == std::vector<std::string>{"api", "import", "batch"} &&
+            request.method == "POST") {
+            const json::Value body = json::parse(request.body);
+            const json::Value empty_sources{json::Value::Array{}};
+            const auto& pgns = body.get("pgns", empty_sources).as_array();
+            const auto& urls = body.get("urls", empty_sources).as_array();
+            if (pgns.empty() && urls.empty())
+                throw Error(ErrorCode::InvalidArgument, "batch requires pgns or urls");
+            if (pgns.size() + urls.size() > 100)
+                throw Error(ErrorCode::InvalidArgument,
+                            "batch exceeds the 100-game backpressure limit");
+            json::Value::Array game_ids;
+            std::vector<std::string> batch_game_ids;
+            json::Value::Array jobs;
+            std::size_t imported_count = 0;
+            std::size_t duplicate_count = 0;
+            std::size_t failed_count = 0;
+            for (const auto& pgn : pgns) {
+                try {
+                    const auto imported = importer_.from_pgn(pgn.as_string());
+                    const auto added = repository_.add(imported);
+                    added == app::AddResult::Added ? ++imported_count : ++duplicate_count;
+                    game_ids.emplace_back(imported.game.identity);
+                    batch_game_ids.push_back(imported.game.identity);
+                } catch (const Error&) {
+                    ++failed_count;
+                }
+            }
+            for (const auto& url : urls) {
+                try {
+                    const auto imported = importer_.from_url(url.as_string());
+                    const auto added = repository_.add(imported);
+                    added == app::AddResult::Added ? ++imported_count : ++duplicate_count;
+                    game_ids.emplace_back(imported.game.identity);
+                    batch_game_ids.push_back(imported.game.identity);
+                } catch (const Error&) {
+                    ++failed_count;
+                }
+            }
+            const std::size_t discovered = pgns.size() + urls.size();
+            std::vector<std::string> queued_game_ids;
+            for (const auto& game_id : batch_game_ids)
+                if (std::find(queued_game_ids.begin(), queued_game_ids.end(), game_id) ==
+                    queued_game_ids.end())
+                    queued_game_ids.push_back(game_id);
+            std::size_t queued_count = 0;
+            for (const auto& job : jobs_.start_batch(queued_game_ids)) {
+                jobs.push_back(app::to_json(job));
+                if (job.status == app::JobStatus::Queued ||
+                    job.status == app::JobStatus::Running)
+                    ++queued_count;
+            }
+            const json::Value batch = repository_.create_batch(
+                std::move(queued_game_ids), discovered, imported_count, duplicate_count, failed_count);
+            return json_response(202, json::Value::Object{
+                                          {"batch_id", batch.at("id").as_string()},
+                                          {"discovered", discovered}, {"imported", imported_count},
+                                          {"duplicates", duplicate_count}, {"queued", queued_count},
+                                          {"failed", failed_count}, {"game_ids", std::move(game_ids)},
+                                          {"jobs", std::move(jobs)},
+                                      });
+        }
+        if (parts == std::vector<std::string>{"api", "batches"} && request.method == "GET") {
+            json::Value batches = repository_.batches();
+            batches.as_object().insert_or_assign("cache_hits", jobs_.cache_hits());
+            return json_response(200, std::move(batches));
         }
         if (parts.size() >= 3 && parts[0] == "api" && parts[1] == "games") {
             const auto game = repository_.get(parts[2]);
@@ -397,7 +562,18 @@ Response Api::handle(const Request& request) {
             json::Value::Array jobs;
             for (const auto& job : jobs_.list())
                 jobs.push_back(app::to_json(job));
-            return json_response(200, json::Value::Object{{"jobs", std::move(jobs)}});
+            return json_response(200, json::Value::Object{{"jobs", std::move(jobs)},
+                                                           {"paused", jobs_.paused()}});
+        }
+        if (parts == std::vector<std::string>{"api", "jobs", "pause"} &&
+            request.method == "POST") {
+            jobs_.pause();
+            return json_response(200, json::Value::Object{{"paused", true}});
+        }
+        if (parts == std::vector<std::string>{"api", "jobs", "resume"} &&
+            request.method == "POST") {
+            jobs_.resume();
+            return json_response(200, json::Value::Object{{"paused", false}});
         }
         if (parts.size() == 3 && parts[0] == "api" && parts[1] == "jobs") {
             const std::uint64_t id = parse_id(parts[2]);

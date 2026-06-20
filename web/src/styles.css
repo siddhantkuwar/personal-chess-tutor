@@ -32,6 +32,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .app-header nav { display: flex; align-items: center; gap: 8px; }
 .app-header nav button, .menu-button { min-height: 42px; padding: 0 10px; border: 0; background: transparent; display: inline-flex; align-items: center; gap: 8px; color: #4d5049; cursor: pointer; font-size: 14px; }
 .app-header nav button:hover { color: var(--sage); }
+.app-header nav button.active { color: var(--sage); box-shadow: inset 0 -2px var(--sage); }
 .menu-button { display: none; }
 
 .import-bar { margin: 14px 18px 10px; min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); cursor: pointer; text-align: left; }
@@ -157,6 +158,81 @@ dialog::backdrop { background: rgba(34, 35, 31, .32); }
 .secondary-action { border: 1px solid var(--rule); background: transparent; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.learning-shell { min-height: 100vh; display: grid; grid-template-rows: 64px 1fr 52px; }
+.learning-main { width: min(1440px, calc(100% - 40px)); margin: 0 auto; padding: 42px 0 64px; }
+.learning-heading { display: flex; justify-content: space-between; align-items: end; gap: 40px; padding-bottom: 28px; border-bottom: 2px solid var(--text); }
+.learning-heading h1 { max-width: 760px; margin: 7px 0 0; font: clamp(38px, 5vw, 68px)/1.02 var(--serif); letter-spacing: -.045em; }
+.learning-heading > p { max-width: 360px; color: var(--muted); font: 16px/1.55 var(--serif); }
+.overline { margin: 0; color: var(--rust); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
+.metric { min-height: 138px; padding: 26px 22px; border-right: 1px solid var(--rule); }
+.metric:last-child { border-right: 0; }
+.metric strong { display: block; font: 42px/1 var(--serif); }
+.metric span { display: block; margin: 8px 0 3px; font-weight: 700; }
+.metric small { color: var(--muted); }
+.learning-grid { display: grid; grid-template-columns: minmax(520px, 1.35fr) minmax(280px, .65fr); gap: 18px; padding-top: 24px; }
+.training-panel, .queue-panel, .trend-panel, .weakness-panel, .resource-panel, .batch-panel { border: 1px solid var(--rule); background: var(--surface); }
+.training-panel { grid-row: span 2; padding: 22px; }
+.panel-title { display: flex; justify-content: space-between; align-items: end; margin-bottom: 18px; }
+.panel-title h2 { margin: 4px 0 0; font: 28px/1.15 var(--serif); }
+.training-board { width: min(100%, 610px); height: auto; aspect-ratio: 1; margin: 0 auto; }
+.training-board .piece { font-size: clamp(28px, 4.8vw, 64px); }
+.coach-sequence { width: min(100%, 610px); margin: 22px auto 0; }
+.coach-sequence ol { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0; list-style-position: inside; }
+.coach-sequence li { min-height: 70px; padding: 10px; border-top: 2px solid var(--sage); color: var(--muted); font: 13px/1.4 var(--serif); }
+.hint-copy { min-height: 48px; padding: 13px; background: var(--sage-soft); font: 14px/1.5 var(--serif); }
+.hint-locked { display: block; margin: 8px 0; color: var(--muted); }
+.attempt-form { display: grid; grid-template-columns: 1fr 180px; gap: 10px; margin-top: 12px; }
+.attempt-form label { color: var(--muted); font-size: 12px; }
+.attempt-form input { display: block; width: 100%; height: 44px; margin-top: 4px; padding: 8px 12px; border: 1px solid var(--rule); background: white; font-family: ui-monospace, monospace; }
+.attempt-form .primary-action { align-self: end; }
+.attempt-message { min-height: 24px; color: var(--sage); font: 14px var(--serif); }
+.lesson-replay { padding: 18px; border-left: 4px solid var(--rust); background: var(--rust-soft); }
+.lesson-replay p { font: 14px/1.5 var(--serif); }
+.lesson-replay .primary-action { width: auto; }
+.training-empty { display: grid; place-items: center; min-height: 360px; color: var(--muted); }
+.queue-panel, .trend-panel, .weakness-panel, .resource-panel, .batch-panel { padding: 22px; }
+.drill-list { display: grid; gap: 8px; }
+.drill-list button { display: flex; justify-content: space-between; gap: 14px; min-height: 54px; padding: 10px 12px; border: 1px solid var(--rule); background: transparent; text-align: left; cursor: pointer; }
+.drill-list button.active { border-color: var(--sage); background: var(--sage-soft); }
+.drill-list small { color: var(--muted); text-transform: capitalize; }
+.trend-panel { min-width: 0; }
+.trend-legend { display: flex; gap: 12px; color: var(--muted); font-size: 11px; }
+.trend-legend span::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; }
+.trend-legend .games::before, .trend-bars .games { background: var(--sage); }
+.trend-legend .mistakes::before, .trend-bars .mistakes { background: var(--rust); }
+.trend-legend .attempts::before, .trend-bars .attempts { background: #d6b864; }
+.trend-chart { display: grid; grid-template-columns: repeat(14, minmax(8px, 1fr)); gap: 5px; height: 150px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.trend-day { display: grid; grid-template-rows: 1fr 22px; min-width: 0; }
+.trend-bars { display: flex; align-items: end; justify-content: center; gap: 2px; min-height: 110px; }
+.trend-bars i { width: min(7px, 30%); min-height: 0; }
+.trend-day small { overflow: visible; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.weakness-row { display: flex; justify-content: space-between; gap: 20px; padding: 14px 0; border-top: 1px solid var(--rule); }
+.weakness-row div { display: grid; gap: 4px; }
+.weakness-row small { color: var(--muted); }
+.weakness-row > span { font: 26px var(--serif); }
+.opening-summary { margin-top: 20px; padding-top: 18px; border-top: 2px solid var(--text); }
+.opening-summary > div { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.opening-summary small { color: var(--muted); }
+.resource { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 16px 0; border-top: 1px solid var(--rule); }
+.resource p { margin: 5px 0; color: var(--muted); font: 13px/1.45 var(--serif); }
+.resource small { color: var(--rust); text-transform: capitalize; }
+.resource button { min-height: 38px; border: 1px solid var(--sage); background: transparent; color: var(--sage); }
+.batch-panel textarea { width: 100%; min-height: 130px; padding: 12px; border: 1px solid var(--rule); resize: vertical; font: 12px/1.5 ui-monospace, monospace; }
+.batch-panel .primary-action { width: auto; margin-top: 10px; }
+.queue-toggle { min-height: 40px; padding: 0 12px; border: 1px solid var(--sage); background: transparent; color: var(--sage); }
+.batch-progress { display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; padding: 12px; margin-bottom: 14px; background: var(--sage-soft); }
+.batch-progress span { color: var(--muted); font-size: 12px; }
+.batch-progress progress { grid-column: 1 / -1; width: 100%; accent-color: var(--sage); }
+
+@media (max-width: 900px) {
+  .learning-heading { display: block; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .metric:nth-child(2) { border-right: 0; }
+  .learning-grid { grid-template-columns: 1fr; }
+  .training-panel { grid-row: auto; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
 @media (max-width: 1050px) {
@@ -167,12 +243,21 @@ dialog::backdrop { background: rgba(34, 35, 31, .32); }
 }
 
 @media (max-width: 760px) {
+  .learning-shell { display: block; }
+  .learning-main { width: calc(100% - 28px); padding-top: 28px; }
+  .learning-heading h1 { font-size: 42px; }
+  .metrics { grid-template-columns: 1fr 1fr; }
+  .metric { min-height: 115px; padding: 18px 12px; }
+  .metric strong { font-size: 32px; }
+  .coach-sequence ol { grid-template-columns: 1fr; }
+  .attempt-form { grid-template-columns: 1fr; }
   .app-shell { display: block; height: auto; min-height: 100vh; overflow: visible; }
   .app-header { height: 64px; padding: 0 20px; }
   .brand { font-size: 25px; }
-  .app-header nav { display: none; }
-  .menu-button { display: inline-flex; padding: 0; }
-  .menu-button svg { width: 29px; height: 29px; }
+  .app-header nav { display: flex; gap: 0; }
+  .app-header nav button { width: 38px; padding: 0 8px; }
+  .app-header nav button span { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .menu-button { display: none; }
   .import-bar { width: calc(100% - 32px); min-height: 56px; margin: 16px; justify-content: center; }
   .import-bar span, .import-bar > svg:last-child { display: none; }
   .workspace { display: flex; flex-direction: column; padding: 0 14px 24px; }

@@ -4,11 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
 
 namespace pct::storage {
+
+inline constexpr std::uint16_t current_schema_version = 2;
+enum class CompactionStage { TemporaryWritten, Validated, BeforeReplace, Replaced };
 
 enum class EventType : std::uint16_t {
     GameImported = 1,
@@ -18,6 +22,19 @@ enum class EventType : std::uint16_t {
     MistakeClassified = 5,
     ExplanationCreated = 6,
     AnalysisCompleted = 7,
+    DrillCreated = 8,
+    DrillAttempted = 9,
+    ResourceRecommended = 10,
+    ResourceCompleted = 11,
+    RatingObserved = 12,
+    ProfileSnapshotCreated = 13,
+    SchemaMigrated = 14,
+    LogCompacted = 15,
+    BatchCreated = 16,
+    BatchStateChanged = 17,
+    AnalysisJobStateChanged = 18,
+    DrillSessionUpdated = 19,
+    ShallowAnalysisCompleted = 20,
 };
 
 struct Event {
@@ -49,6 +66,8 @@ class EventLog {
            std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now());
     [[nodiscard]] ReplayResult replay() const;
     [[nodiscard]] bool recover_trailing_record();
+    [[nodiscard]] std::size_t compact(
+        const std::function<void(CompactionStage)>& stage_hook = {});
     [[nodiscard]] const std::filesystem::path& path() const {
         return path_;
     }

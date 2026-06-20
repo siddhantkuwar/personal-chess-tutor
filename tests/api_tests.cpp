@@ -64,6 +64,15 @@ TEST_CASE("API validates request shape and unknown resources") {
     CHECK_EQ(fixture.api.handle(service::Request{"GET", "/api/unknown", {}, {}}).status, 404);
 }
 
+TEST_CASE("API path router decodes identifiers safely") {
+    ApiFixture fixture;
+    const auto response = fixture.api.handle(
+        service::Request{"GET", "/api/drills/game%3A0", {}, {}});
+    CHECK_EQ(response.status, 404);
+    CHECK_EQ(fixture.api.handle(service::Request{"GET", "/api/drills/bad%XX", {}, {}}).status,
+             400);
+}
+
 TEST_CASE("API exposes settings mistakes and analysis contracts") {
     ApiFixture fixture;
     const auto settings = fixture.api.handle(service::Request{"GET", "/api/settings", {}, {}});
@@ -72,4 +81,64 @@ TEST_CASE("API exposes settings mistakes and analysis contracts") {
     const auto mistakes = fixture.api.handle(service::Request{"GET", "/api/mistakes", {}, {}});
     CHECK_EQ(mistakes.status, 200);
     CHECK(json::parse(mistakes.body).at("mistakes").as_array().empty());
+}
+
+TEST_CASE("API exposes phase two profile drills resources and batch contracts") {
+    ApiFixture fixture;
+    CHECK_EQ(fixture.api.handle(service::Request{"GET", "/api/drills", {}, {}}).status, 200);
+    const auto profile = fixture.api.handle(service::Request{"GET", "/api/profile", {}, {}});
+    CHECK_EQ(profile.status, 200);
+    CHECK_EQ(json::parse(profile.body).at("projection_version").as_string(), "profile-1");
+    CHECK_EQ(fixture.api.handle(service::Request{"GET", "/api/resources", {}, {}}).status, 200);
+    const std::string pgn = "[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 1-0";
+    const std::string body = json::dump(json::Value::Object{
+        {"pgns", json::Value::Array{pgn, pgn, "invalid"}},
+    });
+    const auto batch = fixture.api.handle(service::Request{"POST", "/api/import/batch", {}, body});
+    CHECK_EQ(batch.status, 202);
+    const auto result = json::parse(batch.body);
+    CHECK_EQ(result.at("discovered").as_size(), 3ULL);
+    CHECK_EQ(result.at("imported").as_size(), 1ULL);
+    CHECK_EQ(result.at("duplicates").as_size(), 1ULL);
+    CHECK_EQ(result.at("failed").as_size(), 1ULL);
+    CHECK_EQ(result.at("batch_id").as_string(), "batch-1");
+    const auto batches = fixture.api.handle(service::Request{"GET", "/api/batches", {}, {}});
+    CHECK_EQ(batches.status, 200);
+    CHECK_EQ(json::parse(batches.body).at("batches").as_array().size(), 1ULL);
+    CHECK(json::parse(batches.body).as_object().contains("cache_hits"));
+}
+
+TEST_CASE("batch import applies bounded backpressure") {
+    ApiFixture fixture;
+    json::Value::Array pgns;
+    for (int index = 0; index < 101; ++index)
+        pgns.emplace_back("invalid");
+    const auto response = fixture.api.handle(service::Request{
+        "POST", "/api/import/batch", {},
+        json::dump(json::Value::Object{{"pgns", std::move(pgns)}})});
+    CHECK_EQ(response.status, 400);
+}
+
+TEST_CASE("storage maintenance API creates snapshots and performs verified compaction") {
+    ApiFixture fixture;
+    const auto snapshot =
+        fixture.api.handle(service::Request{"POST", "/api/storage/snapshot", {}, "{}"});
+    CHECK_EQ(snapshot.status, 200);
+    CHECK(json::parse(snapshot.body).at("created").as_bool());
+    const auto compact =
+        fixture.api.handle(service::Request{"POST", "/api/storage/compact", {}, "{}"});
+    CHECK_EQ(compact.status, 200);
+    CHECK(json::parse(compact.body).at("compacted").as_bool());
+}
+
+TEST_CASE("drill session and hint endpoints reject unknown drills") {
+    ApiFixture fixture;
+    CHECK_EQ(fixture.api.handle(
+                 service::Request{"POST", "/api/drills/missing/session", {}, "{}"})
+                 .status,
+             404);
+    CHECK_EQ(fixture.api.handle(
+                 service::Request{"POST", "/api/drills/missing/hint", {}, "{}"})
+                 .status,
+             404);
 }

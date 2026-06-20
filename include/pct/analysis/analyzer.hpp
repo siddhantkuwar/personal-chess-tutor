@@ -7,11 +7,14 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
 
 namespace pct::analysis {
+
+inline constexpr std::string_view opening_book_version = "2026.1";
 
 enum class AnalysisStage { Parsing, ShallowScan, DeepAnalysis, Complete };
 enum class GamePhase { Opening, Middlegame, Endgame };
@@ -62,12 +65,28 @@ struct Mistake {
     std::string punishment;
     std::vector<std::string> better_moves;
     engine::AnalysisResult engine_details;
+    std::vector<std::string> evidence;
+    std::string confidence{"proven"};
+    std::string classifier_version{"taxonomy-2"};
 };
 
 struct GameAnalysis {
     std::string game_id;
     std::vector<MoveAssessment> moves;
     std::vector<Mistake> mistakes;
+    std::string eco{"A00"};
+    std::string opening{"Uncommon Opening"};
+    std::size_t book_ply{0};
+    std::optional<std::size_t> departure_ply;
+    std::string opening_book_version{std::string(::pct::analysis::opening_book_version)};
+};
+
+struct OpeningMatch {
+    std::string eco;
+    std::string name;
+    std::size_t book_ply{0};
+    std::optional<std::size_t> departure_ply;
+    std::string book_version{std::string(opening_book_version)};
 };
 
 struct AnalyzerOptions {
@@ -86,11 +105,13 @@ class AnalysisCache {
                            engine::AnalysisResult& result) const;
     void put(const engine::AnalysisRequest& request, engine::AnalysisResult result);
     [[nodiscard]] std::size_t size() const;
+    [[nodiscard]] std::size_t hit_count() const;
 
   private:
     [[nodiscard]] static std::string key(const engine::AnalysisRequest& request);
     mutable std::mutex mutex_;
     std::map<std::string, engine::AnalysisResult> values_;
+    mutable std::size_t hits_{0};
 };
 
 class Analyzer {
@@ -99,7 +120,15 @@ class Analyzer {
 
     [[nodiscard]] GameAnalysis analyze(const chess::Game& game, ProgressCallback progress = {},
                                        std::stop_token stop_token = {});
+    [[nodiscard]] GameAnalysis analyze_shallow(const chess::Game& game,
+                                               ProgressCallback progress = {},
+                                               std::stop_token stop_token = {});
+    [[nodiscard]] GameAnalysis analyze_deep(const chess::Game& game,
+                                            GameAnalysis shallow_analysis,
+                                            ProgressCallback progress = {},
+                                            std::stop_token stop_token = {});
     [[nodiscard]] static GamePhase classify_phase(const chess::Board& board, std::size_t ply);
+    [[nodiscard]] std::size_t cache_hits() const { return cache_.hit_count(); }
 
   private:
     engine::AnalysisEngine& engine_;
@@ -113,5 +142,12 @@ class Analyzer {
 [[nodiscard]] std::string_view name(AnalysisStage stage);
 [[nodiscard]] std::string_view name(GamePhase phase);
 [[nodiscard]] std::string_view name(MoveQuality quality);
+[[nodiscard]] OpeningMatch recognize_opening(const chess::Game& game);
+[[nodiscard]] std::string classify_tactical_motif(chess::Board board,
+                                                  const chess::Move& best_move);
+[[nodiscard]] std::string
+classify_mistake_category(const chess::Game& game, std::size_t ply,
+                          const engine::AnalysisResult& best_before,
+                          const engine::AnalysisResult& best_after);
 
 } // namespace pct::analysis

@@ -79,3 +79,72 @@ TEST_CASE("event serialization is deterministic") {
     const Event event{1, EventType::MistakeDetected, 42, 123456, "payload"};
     CHECK(EventLog::serialize(event) == EventLog::serialize(event));
 }
+
+TEST_CASE("schema one records migrate during atomic validated compaction") {
+    TempFile file{temp_path("compact")};
+    const Event legacy{1, EventType::GameImported, 1, 123, "legacy"};
+    const auto bytes = EventLog::serialize(legacy);
+    {
+        std::ofstream output(file.path, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    }
+    EventLog log(file.path);
+    CHECK_EQ(log.replay().events.front().schema_version, 1);
+    CHECK_EQ(log.compact(), 3ULL);
+    const auto replay = log.replay();
+    CHECK_EQ(replay.events.size(), 3ULL);
+    CHECK_EQ(replay.events.front().schema_version, current_schema_version);
+    CHECK(replay.events[1].type == EventType::SchemaMigrated);
+    CHECK(replay.events.back().type == EventType::LogCompacted);
+}
+
+TEST_CASE("compaction fault hooks retain a valid old or new log at every stage") {
+    for (const auto failure : {CompactionStage::TemporaryWritten, CompactionStage::Validated,
+                               CompactionStage::BeforeReplace, CompactionStage::Replaced}) {
+        TempFile file{temp_path("compact-fault-" + std::to_string(static_cast<int>(failure)))};
+        EventLog log(file.path);
+        static_cast<void>(log.append(EventType::GameImported, "game"));
+        CHECK_THROWS(log.compact([failure](CompactionStage stage) {
+            if (stage == failure)
+                throw std::runtime_error("injected interruption");
+        }));
+        EventLog reopened(file.path);
+        const auto replay = reopened.replay();
+        CHECK(replay.corruptions.empty());
+        CHECK(!replay.truncated_tail);
+        CHECK(!replay.events.empty());
+    }
+}
+
+TEST_CASE("compaction removes superseded projection state while preserving latest value") {
+    TempFile file{temp_path("compact-superseded")};
+    EventLog log(file.path);
+    static_cast<void>(log.append(EventType::AnalysisJobStateChanged,
+                                 "{\"game_id\":\"g\",\"status\":\"queued\"}"));
+    static_cast<void>(log.append(EventType::AnalysisJobStateChanged,
+                                 "{\"game_id\":\"g\",\"status\":\"running\"}"));
+    static_cast<void>(log.append(EventType::AnalysisJobStateChanged,
+                                 "{\"game_id\":\"g\",\"status\":\"complete\"}"));
+    CHECK_EQ(log.compact(), 2ULL);
+    const auto replay = log.replay();
+    CHECK_EQ(replay.events.size(), 2ULL);
+    CHECK(replay.events.front().payload.find("complete") != std::string::npos);
+    CHECK(replay.events.back().type == EventType::LogCompacted);
+}
+
+TEST_CASE("compaction drops shallow projections superseded by completed analysis") {
+    TempFile file{temp_path("compact-shallow")};
+    EventLog log(file.path);
+    static_cast<void>(log.append(
+        EventType::ShallowAnalysisCompleted,
+        "{\"game_id\":\"g\",\"analysis\":{}}"));
+    static_cast<void>(log.append(
+        EventType::AnalysisCompleted,
+        "{\"game_id\":\"g\",\"analysis\":{}}"));
+    CHECK_EQ(log.compact(), 2ULL);
+    const auto replay = log.replay();
+    CHECK_EQ(replay.events.size(), 2ULL);
+    CHECK(replay.events.front().type == EventType::AnalysisCompleted);
+    CHECK(replay.events.back().type == EventType::LogCompacted);
+}

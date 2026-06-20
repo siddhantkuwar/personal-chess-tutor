@@ -4,7 +4,10 @@
 #include "pct/common/error.hpp"
 
 #include <cctype>
+#include <algorithm>
+#include <array>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 
 namespace pct::chess {
@@ -78,6 +81,20 @@ std::uint64_t fnv1a(std::string_view value) {
     return hash;
 }
 
+std::vector<std::int64_t> extract_clocks(std::string_view movetext) {
+    const std::regex clock_pattern(R"(%clk\s+([0-9]+):([0-9]{1,2}):([0-9]{1,2}(?:\.[0-9]+)?))");
+    const std::string text(movetext);
+    std::vector<std::int64_t> clocks;
+    for (std::sregex_iterator iterator(text.begin(), text.end(), clock_pattern), end;
+         iterator != end; ++iterator) {
+        const double seconds = std::stod((*iterator)[1].str()) * 3600.0 +
+                               std::stod((*iterator)[2].str()) * 60.0 +
+                               std::stod((*iterator)[3].str());
+        clocks.push_back(static_cast<std::int64_t>(seconds * 1000.0));
+    }
+    return clocks;
+}
+
 } // namespace
 
 std::string Game::tag(std::string_view key, std::string_view fallback) const {
@@ -131,10 +148,35 @@ Game parse_pgn(std::string_view pgn) {
         const Move move = parse_san(board, token);
         const std::string canonical = to_san(board, move);
         board.make_move(move);
-        game.plies.push_back(Ply{move, canonical, before, board.to_fen()});
+        game.plies.push_back(Ply{move, canonical, before, board.to_fen(), std::nullopt,
+                                 std::nullopt});
     }
     if (game.plies.empty()) {
         throw Error(ErrorCode::ParseError, "PGN contains no moves");
+    }
+    const auto clocks = extract_clocks(pgn.substr(offset));
+    std::int64_t initial_ms = 0;
+    std::int64_t increment_ms = 0;
+    const std::string time_control = game.tag("TimeControl");
+    if (!time_control.empty() && time_control != "-") {
+        try {
+            const std::size_t plus = time_control.find('+');
+            initial_ms = std::stoll(time_control.substr(0, plus)) * 1000;
+            if (plus != std::string::npos)
+                increment_ms = std::stoll(time_control.substr(plus + 1)) * 1000;
+        } catch (const std::exception&) {
+            initial_ms = 0;
+            increment_ms = 0;
+        }
+    }
+    std::array<std::int64_t, 2> previous{initial_ms, initial_ms};
+    for (std::size_t index = 0; index < game.plies.size() && index < clocks.size(); ++index) {
+        game.plies[index].clock_ms = clocks[index];
+        const std::size_t color = index % 2;
+        if (previous[color] > 0)
+            game.plies[index].elapsed_ms =
+                std::max<std::int64_t>(0, previous[color] + increment_ms - clocks[index]);
+        previous[color] = clocks[index];
     }
     game.identity = normalized_game_identity(game);
     return game;

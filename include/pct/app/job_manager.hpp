@@ -39,9 +39,15 @@ class JobManager {
     JobManager& operator=(const JobManager&) = delete;
 
     [[nodiscard]] AnalysisJob start(std::string game_id);
+    [[nodiscard]] std::vector<AnalysisJob> start_batch(
+        const std::vector<std::string>& game_ids);
     [[nodiscard]] bool cancel(std::uint64_t job_id);
     [[nodiscard]] std::optional<AnalysisJob> get(std::uint64_t job_id) const;
     [[nodiscard]] std::vector<AnalysisJob> list() const;
+    void pause();
+    void resume();
+    [[nodiscard]] bool paused() const;
+    [[nodiscard]] std::size_t cache_hits() const { return analyzer_.cache_hits(); }
     void set_observer(JobObserver observer);
 
   private:
@@ -50,10 +56,15 @@ class JobManager {
     mutable std::mutex mutex_;
     std::condition_variable_any condition_;
     std::map<std::uint64_t, AnalysisJob> jobs_;
-    std::deque<std::uint64_t> queue_;
+    struct Task {
+        std::uint64_t job_id{0};
+        bool deep{false};
+    };
+    std::deque<Task> queue_;
     std::uint64_t next_id_{1};
     JobObserver observer_;
     std::jthread worker_;
+    bool paused_{false};
 
     void work(std::stop_token stop_token);
     void notify(const AnalysisJob& job);

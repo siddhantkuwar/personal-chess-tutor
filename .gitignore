@@ -36,3 +36,6 @@ data/
 
 # Generated frontend assets copied into the C++ bundle
 web/dist/
+
+# Private product and learning documentation (never commit publicly)
+/docs/

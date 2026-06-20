@@ -15,6 +15,10 @@ option(PCT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/resources")
+configure_file(resources/catalog.json resources/catalog.json COPYONLY)
+configure_file(resources/openings.json resources/openings.json COPYONLY)
+
 add_library(pct_core
     src/common/json.cpp
     src/app/repository.cpp
@@ -26,12 +30,18 @@ add_library(pct_core
     src/import/import_service.cpp
     src/engine/stockfish.cpp
     src/analysis/analyzer.cpp
+    src/analysis/opening_book.cpp
+    src/training/training.cpp
     src/storage/event_log.cpp
     src/service/http_server.cpp
 )
 
 target_include_directories(pct_core PUBLIC include)
 target_link_libraries(pct_core PUBLIC Threads::Threads CURL::libcurl)
+target_compile_definitions(
+    pct_core PRIVATE
+        PCT_RESOURCE_CATALOG_PATH="${CMAKE_CURRENT_BINARY_DIR}/resources/catalog.json"
+        PCT_OPENING_BOOK_PATH="${CMAKE_CURRENT_BINARY_DIR}/resources/openings.json")
 
 if(MSVC)
     target_compile_options(pct_core PRIVATE /W4)
@@ -71,6 +81,8 @@ if(BUILD_TESTING)
         tests/repository_tests.cpp
         tests/job_tests.cpp
         tests/api_tests.cpp
+        tests/training_tests.cpp
+        tests/phase2_e2e_tests.cpp
     )
     target_link_libraries(pct-tests PRIVATE pct_core)
     add_executable(pct-fake-stockfish tests/fake_stockfish.cpp)

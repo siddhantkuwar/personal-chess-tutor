@@ -1,0 +1,137 @@
+{
+  "version": "2026.1",
+  "resources": [
+    {
+      "id": "lichess-hanging",
+      "title": "Lichess: Practice hanging pieces",
+      "kind": "interactive",
+      "locator": "https://lichess.org/practice",
+      "categories": ["Hanging piece", "Hanging queen", "Ignored attack"],
+      "phase": "any",
+      "minimum_rating": 0,
+      "maximum_rating": 1800,
+      "prerequisite": "none",
+      "opening": "any"
+    },
+    {
+      "id": "chesstactics-forcing",
+      "title": "Forcing moves: checks, captures, threats",
+      "kind": "lesson",
+      "locator": "Local lesson 1",
+      "categories": ["Missed check", "Missed free capture", "One-move tactical loss", "Fork", "Pin", "Skewer", "Discovered attack"],
+      "phase": "middlegame",
+      "minimum_rating": 0,
+      "maximum_rating": 1600,
+      "prerequisite": "legal move basics",
+      "opening": "any"
+    },
+    {
+      "id": "opening-principles",
+      "title": "Opening principles: develop, control, castle",
+      "kind": "lesson",
+      "locator": "Local lesson 2",
+      "categories": ["Delayed development", "Premature queen development", "Repeated piece movement", "Unnecessary flank-pawn moves", "Delayed castling"],
+      "phase": "opening",
+      "minimum_rating": 0,
+      "maximum_rating": 1800,
+      "prerequisite": "none",
+      "opening": "any"
+    },
+    {
+      "id": "king-safety",
+      "title": "King safety and back-rank patterns",
+      "kind": "lesson",
+      "locator": "Local lesson 3",
+      "categories": ["Unsafe king", "Back-rank weakness", "Failed response to mate threat"],
+      "phase": "any",
+      "minimum_rating": 600,
+      "maximum_rating": 2200,
+      "prerequisite": "forcing moves",
+      "opening": "any"
+    },
+    {
+      "id": "endgame-pawns",
+      "title": "Passed pawns and active kings",
+      "kind": "endgame_module",
+      "locator": "Local lesson 4",
+      "categories": ["Ignored passed pawn", "Incorrect king activity", "Promotion-race error"],
+      "phase": "endgame",
+      "minimum_rating": 600,
+      "maximum_rating": 2200,
+      "prerequisite": "basic checkmates",
+      "opening": "any"
+    },
+    {
+      "id": "video-back-rank",
+      "title": "Back-rank safety: the escape-square check",
+      "kind": "video_timestamp",
+      "locator": "https://www.youtube.com/results?search_query=chess+back+rank+mate#t=2m15s",
+      "categories": ["Back-rank weakness", "Open king position"],
+      "phase": "middlegame",
+      "minimum_rating": 600,
+      "maximum_rating": 1800,
+      "prerequisite": "forcing moves",
+      "opening": "any"
+    },
+    {
+      "id": "book-tactics-chapter",
+      "title": "Chess tactics workbook: forks, pins, and skewers",
+      "kind": "book_chapter",
+      "locator": "Catalog reference: Tactical Motifs, chapter 3",
+      "categories": ["Fork", "Pin", "Skewer", "Overloaded defender", "Removal of defender"],
+      "phase": "middlegame",
+      "minimum_rating": 800,
+      "maximum_rating": 2200,
+      "prerequisite": "checks captures threats",
+      "opening": "any"
+    },
+    {
+      "id": "italian-repertoire",
+      "title": "Italian Game: a compact personal repertoire lesson",
+      "kind": "repertoire_lesson",
+      "locator": "Local repertoire lesson: Italian Game",
+      "categories": ["Opening-theory deviation", "Delayed development", "Repeated piece movement"],
+      "phase": "opening",
+      "minimum_rating": 600,
+      "maximum_rating": 2000,
+      "prerequisite": "opening principles",
+      "opening": "Italian Game"
+    },
+    {
+      "id": "free-video-forcing-moves",
+      "title": "Free video: checks, captures, and threats",
+      "kind": "free_video",
+      "locator": "https://www.youtube.com/results?search_query=free+chess+forcing+moves+lesson",
+      "categories": ["Missed check", "Missed free capture", "One-move tactical loss"],
+      "phase": "any",
+      "minimum_rating": 0,
+      "maximum_rating": 1800,
+      "prerequisite": "legal move basics",
+      "opening": "any"
+    },
+    {
+      "id": "exercise-candidate-moves",
+      "title": "Candidate-move calculation exercise",
+      "kind": "exercise",
+      "locator": "Local exercise: list checks, captures, and threats before moving",
+      "categories": ["Missed check", "Missed free capture", "Failed recapture", "Ignored attack"],
+      "phase": "any",
+      "minimum_rating": 0,
+      "maximum_rating": 2000,
+      "prerequisite": "none",
+      "opening": "any"
+    },
+    {
+      "id": "theme-deflection-overload",
+      "title": "Tactical theme: defenders and overload",
+      "kind": "tactical_theme",
+      "locator": "Local tactical theme: overloaded and removed defenders",
+      "categories": ["Overloaded defender", "Removal of defender", "Pin", "Skewer"],
+      "phase": "middlegame",
+      "minimum_rating": 700,
+      "maximum_rating": 2400,
+      "prerequisite": "checks captures threats",
+      "opening": "any"
+    }
+  ]
+}

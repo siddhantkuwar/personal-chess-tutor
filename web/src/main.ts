@@ -1,10 +1,11 @@
 import "./styles.css";
-import { importGame, listGames, loadGame } from "./api";
+import { advanceDrillHint, beginDrillSession, completeResource, importBatch, importGame, listGames, loadBatches, loadDrills, loadGame, loadProfile, loadResources, setQueuePaused, submitDrillAttempt } from "./api";
 import { squaresFromFen, uciSquares } from "./chess";
 import { icons } from "./icons";
-import type { Job, Mistake, StoredGame } from "./types";
+import type { BatchProgress, Drill, Job, Mistake, Profile, ResourceRecommendation, StoredGame } from "./types";
 
 type MobileView = "game" | "moves" | "review";
+type AppMode = "game" | "training" | "progress";
 
 interface State {
   game: StoredGame | null;
@@ -15,6 +16,19 @@ interface State {
   error: string;
   busy: boolean;
   mobileView: MobileView;
+  mode: AppMode;
+  drills: Drill[];
+  activeDrill: string;
+  shownHint: number;
+  drillStartedAt: number;
+  profile: Profile | null;
+  resources: ResourceRecommendation[];
+  attemptMessage: string;
+  batchMessage: string;
+  showPunishment: boolean;
+  batches: BatchProgress[];
+  queuePaused: boolean;
+  cacheHits: number;
 }
 
 const initialFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -27,11 +41,60 @@ const state: State = {
   error: "",
   busy: false,
   mobileView: "game",
+  mode: "game",
+  drills: [],
+  activeDrill: "",
+  shownHint: 0,
+  drillStartedAt: Date.now(),
+  profile: null,
+  resources: [],
+  attemptMessage: "",
+  batchMessage: "",
+  showPunishment: false,
+  batches: [],
+  queuePaused: false,
+  cacheHits: 0,
 };
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Application root is missing");
 const app: HTMLDivElement = root;
+
+app.addEventListener("click", async (event) => {
+  const element = event.target instanceof Element ? event.target : null;
+  if (element?.closest("[data-hint]")) {
+    const updated = await advanceDrillHint(state.activeDrill);
+    state.drills = state.drills.map((drill) => drill.id === updated.id ? updated : drill);
+    state.shownHint = updated.hint_level;
+    render();
+  }
+  if (element?.closest("[data-retry]")) {
+    state.showPunishment = false;
+    state.drillStartedAt = Date.now();
+    render();
+  }
+});
+
+app.addEventListener("submit", async (event) => {
+  const form = event.target instanceof HTMLFormElement && event.target.matches(".attempt-form")
+    ? event.target
+    : null;
+  if (!form) return;
+  event.preventDefault();
+  const move = form.querySelector<HTMLInputElement>("#drill-move")?.value.trim().toLowerCase() ?? "";
+  try {
+    const result = await submitDrillAttempt(state.activeDrill, move, Date.now() - state.drillStartedAt, state.shownHint);
+    state.attemptMessage = result.attempt.correct
+      ? `Correct. ${result.drill.explanation}`
+      : `Not yet. The opponent's strongest reply is ${result.drill.punishment || "forcing"}. Retry the position.`;
+    state.showPunishment = !result.attempt.correct;
+    state.shownHint = result.drill.hint_level;
+    await refreshTraining();
+  } catch (error) {
+    state.attemptMessage = error instanceof Error ? error.message : "Attempt failed.";
+  }
+  render();
+});
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>'"]/g, (character) => ({
@@ -222,8 +285,13 @@ function mobileTabsMarkup(): string {
 }
 
 function render(): void {
+  if (state.mode !== "game") {
+    app.innerHTML = trainingShellMarkup();
+    bindTrainingEvents();
+    return;
+  }
   app.innerHTML = `<div class="app-shell">
-    <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button>${icons.book}<span>Study</span></button><button>${icons.settings}<span>Settings</span></button><button>${icons.help}<span>Help</span></button></nav><button class="menu-button" aria-label="Menu">${icons.menu}</button></header>
+    <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game" class="active">${icons.book}<span>Study</span></button><button data-mode="training">${icons.chevron}<span>Train</span></button><button data-mode="progress">${icons.chart}<span>Progress</span></button></nav><button class="menu-button" aria-label="Menu">${icons.menu}</button></header>
     <button class="import-bar" id="open-import">${icons.upload}<strong>${state.busy ? "Importing…" : "Import game"}</strong><span>Drag &amp; drop a .pgn file or paste PGN</span>${icons.chevron}</button>
     <main class="workspace ${state.mobileView}">
       <div class="summary-region">${gameSummaryMarkup()}</div>
@@ -237,6 +305,107 @@ function render(): void {
   bindEvents();
 }
 
+function trainingBoardMarkup(drill: Drill | undefined): string {
+  if (!drill) return `<div class="training-empty">Analyze a game to create your first exact-position drill.</div>`;
+  const solution = drill.solutions[0] ?? "";
+  const highlighted = state.shownHint >= 1 && solution.length >= 2 ? [solution.slice(0, 2)] : null;
+  const fen = state.showPunishment && drill.fen_after_punishment ? drill.fen_after_punishment : drill.fen;
+  return `<div class="training-board board" role="grid" aria-label="Drill position">${squaresFromFen(fen).map((square, index) => {
+    const light = (Math.floor(index / 8) + index) % 2 === 0;
+    const selected = highlighted?.includes(square.name) ?? false;
+    return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell"><span class="piece">${square.piece}</span></div>`;
+  }).join("")}</div>`;
+}
+
+function metric(value: string, label: string, detail: string): string {
+  return `<article class="metric"><strong>${value}</strong><span>${label}</span><small>${detail}</small></article>`;
+}
+
+function rateMetric(value: Profile["endgame_conversion"], label: string): string {
+  const rate = value.rate === null ? "More data needed" : `${Math.round(value.rate * 100)}%`;
+  return `<div><strong>${escapeHtml(label)}: ${rate}</strong><small>${value.numerator} of ${value.denominator}; rates appear after 5 eligible games</small></div>`;
+}
+
+function trendMarkup(profile: Profile | null): string {
+  const points = profile?.activity_trend ?? [];
+  const maximum = Math.max(1, ...points.flatMap((point) => [point.games_analyzed, point.mistakes, point.drill_attempts]));
+  const bars = points.map((point, index) => {
+    const date = new Date(point.day_start_ms);
+    const label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const height = (value: number) => value === 0 ? 0 : Math.max(8, Math.round(value / maximum * 100));
+    const showLabel = index === 0 || index === points.length - 1 || index === 6;
+    return `<div class="trend-day" title="${escapeHtml(`${label}: ${point.games_analyzed} games, ${point.mistakes} mistakes, ${point.drill_attempts} attempts`)}"><div class="trend-bars"><i class="games" style="height:${height(point.games_analyzed)}%"></i><i class="mistakes" style="height:${height(point.mistakes)}%"></i><i class="attempts" style="height:${height(point.drill_attempts)}%"></i></div><small>${showLabel ? escapeHtml(label) : ""}</small></div>`;
+  }).join("");
+  return `<section class="trend-panel"><div class="panel-title"><div><p class="overline">Last 14 calendar days</p><h2>Practice activity</h2></div><div class="trend-legend"><span class="games">Games</span><span class="mistakes">Mistakes</span><span class="attempts">Drills</span></div></div><div class="trend-chart" role="img" aria-label="Daily analyzed games, detected mistakes, and drill attempts">${bars}</div></section>`;
+}
+
+function trainingShellMarkup(): string {
+  const drill = state.drills.find((candidate) => candidate.id === state.activeDrill) ?? state.drills[0];
+  const profile = state.profile;
+  const due = state.drills.filter((candidate) => candidate.schedule.state === "due" || candidate.schedule.state === "new").length;
+  const hint = !drill ? "" : state.shownHint === 0 ? "No hint yet. First identify what changed and calculate forcing moves." : state.shownHint === 1 ? "The relevant piece's starting square is highlighted." : state.shownHint === 2 ? `Candidate moves: ${drill.solutions.join(", ")}` : `Solution: ${drill.solutions[0]}. ${drill.explanation}`;
+  const hintAvailable = Boolean(drill && state.shownHint < drill.available_hint_level);
+  return `<div class="learning-shell">
+    <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game">${icons.book}<span>Study</span></button><button data-mode="training" class="${state.mode === "training" ? "active" : ""}">${icons.chevron}<span>Train</span></button><button data-mode="progress" class="${state.mode === "progress" ? "active" : ""}">${icons.chart}<span>Progress</span></button></nav></header>
+    <main class="learning-main">
+      <header class="learning-heading"><div><p class="overline">Personalized training · ${due} ready today</p><h1>${state.mode === "training" ? "Turn mistakes into stronger habits." : "Progress you can trace back to games."}</h1></div><p>Every count comes from your local event log. No composite score.</p></header>
+      <section class="metrics">${metric(String(profile?.games_analyzed ?? 0), "games deep analyzed", `${profile?.games_shallow_analyzed ?? 0} shallow ready · ${profile?.games_imported ?? 0} imported`)}${metric(`${Math.round((profile?.drill_accuracy ?? 0) * 100)}%`, "drill accuracy", `${profile?.drill_correct ?? 0} of ${profile?.drill_attempts ?? 0} · ${Math.round((profile?.retention_rate ?? 0) * 100)}% retained (${profile?.retained_reviews ?? 0}/${profile?.retention_reviews ?? 0})`)}${metric((profile?.average_centipawn_loss ?? 0).toFixed(0), "average CP loss", `${profile?.total_positions ?? 0} positions`)}${metric(String(due), "reviews ready", `${state.drills.length} drills total`)}</section>
+      <div class="learning-grid">
+        <section class="training-panel"><div class="panel-title"><p class="overline">Daily review</p><h2>${drill ? escapeHtml(drill.category) : "No drills yet"}</h2></div>${trainingBoardMarkup(drill)}
+          ${drill ? `<div class="coach-sequence"><ol><li>What did the previous move change?</li><li>Which piece or square is under threat?</li><li>Choose the strongest response.</li></ol>${state.showPunishment ? `<div class="lesson-replay"><strong>Your game: ${escapeHtml(drill.played_move)} → ${escapeHtml(drill.opponent_response)}</strong><p>${escapeHtml(drill.changed_threat)}</p><p>${drill.attacked_pieces.length ? `Attacked pieces: ${escapeHtml(drill.attacked_pieces.join(", "))}.` : "No direct loose piece was detected; calculate checks and forcing threats."}</p><p>The board shows the opponent's strongest reply. Retry from the exact source position.</p><button class="primary-action" data-retry>Retry exact position</button></div>` : `<p class="hint-copy">${escapeHtml(hint)}</p>${hintAvailable ? `<button class="secondary-action" data-hint>${state.shownHint === 0 ? "Reveal earned hint" : "Reveal next earned hint"}</button>` : `<small class="hint-locked">${state.shownHint >= 3 ? "Solution revealed." : "A failed attempt unlocks the next hint."}</small>`}<form class="attempt-form"><label>Your move in UCI <input id="drill-move" required pattern="[a-h][1-8][a-h][1-8][qrbn]?" placeholder="e2e4"></label><button class="primary-action">Try move</button></form>`}<p class="attempt-message" role="status">${escapeHtml(state.attemptMessage)}</p></div>` : ""}
+        </section>
+        <aside class="queue-panel"><div class="panel-title"><p class="overline">Queue</p><h2>Review schedule</h2></div><div class="drill-list">${state.drills.map((item) => `<button data-drill="${escapeHtml(item.id)}" class="${item.id === drill?.id ? "active" : ""}"><span>${escapeHtml(item.category)}</span><small>${item.schedule.state} · ${Math.round(item.schedule.success_rate * 100)}%</small></button>`).join("") || "<p>No generated drills.</p>"}</div></aside>
+        ${trendMarkup(profile)}
+        <section class="weakness-panel"><div class="panel-title"><p class="overline">Evidence · ${profile?.games_analyzed_7_days ?? 0} games this week / ${profile?.games_analyzed_30_days ?? 0} this month</p><h2>Recurring weaknesses</h2></div>${profile?.weaknesses.map((weakness) => `<div class="weakness-row"><div><strong>${escapeHtml(weakness.category)}</strong><small>${weakness.occurrences} total in ${weakness.games} games · ${Math.round(weakness.recurrence_rate * 100)}% recurrence · ${weakness.average_loss_cp.toFixed(0)} average CP loss · phases: ${escapeHtml(Object.entries(weakness.phases).map(([phase, count]) => `${phase} ${count}`).join(", ") || "none")} · ${weakness.repeated_interval_days === null ? "interval needs 2 games" : `${weakness.repeated_interval_days.toFixed(1)} days between repeats`} · ${weakness.occurrences_7_days} last 7 days / ${weakness.occurrences_30_days} last 30</small></div><span>${Math.round(weakness.drill_accuracy * 100)}%</span></div>`).join("") || "<p>Analyze multiple games to reveal recurring patterns.</p>"}<div class="opening-summary"><p class="overline">Personal repertoire · ${escapeHtml(profile?.player_name || "player not inferred")}${profile?.latest_rating ? ` · latest rating ${profile.latest_rating}` : ""}</p>${profile?.openings.map((opening) => `<div><strong>${escapeHtml(opening.eco)} · ${escapeHtml(opening.name)}</strong><small>${opening.games} games · ${opening.mistakes} major mistakes · ${opening.average_centipawn_loss.toFixed(0)} average CP loss</small></div>`).join("") || "<small>No recognized opening yet.</small>"}${profile ? rateMetric(profile.endgame_conversion, "Endgame conversion") + rateMetric(profile.king_safety_violations, "King-safety violation rate") + rateMetric(profile.time_management_failures, "Time-management failure rate") : ""}</div></section>
+        <section class="resource-panel"><div class="panel-title"><p class="overline">Recommended next</p><h2>Resources with reasons</h2></div>${state.resources.map((resource) => `<article class="resource"><div><strong>${escapeHtml(resource.title)}</strong><p>${escapeHtml(resource.evidence)}</p><small>${escapeHtml(resource.kind)} · ${escapeHtml(resource.phase)}</small></div><button data-resource="${escapeHtml(resource.id)}" ${resource.completed ? "disabled" : ""}>${resource.completed ? "Completed" : "Mark studied"}</button></article>`).join("") || "<p>Recommendations appear after analyzed mistakes.</p>"}</section>
+        <section class="batch-panel"><div class="panel-title"><div><p class="overline">History · ${state.cacheHits} position cache hits</p><h2>Batch import recent games</h2></div><button class="queue-toggle" data-queue-action="${state.queuePaused ? "resume" : "pause"}">${state.queuePaused ? "Resume queue" : "Pause queue"}</button></div>${state.batches.map((batch) => `<div class="batch-progress"><strong>${escapeHtml(batch.id)}</strong><span>${batch.completed} complete · ${batch.remaining} games / ${batch.positions_remaining} positions remaining · ${batch.positions_analyzed} positions analyzed · ${batch.duplicates} duplicates · ${batch.failed + batch.job_failures} failed</span><progress max="${Math.max(1, batch.discovered)}" value="${batch.completed + batch.duplicates + batch.failed + batch.job_failures}"></progress></div>`).join("")}<p>Paste Chess.com game URLs one per line, or complete PGNs separated by a line containing <code>---</code>. Duplicate identities are skipped.</p><textarea id="batch-urls" placeholder="https://www.chess.com/game/live/…&#10;https://www.chess.com/game/live/…"></textarea><textarea id="batch-pgns" placeholder="[Event &quot;Game one&quot;]…&#10;---&#10;[Event &quot;Game two&quot;]…"></textarea><button class="primary-action" data-batch>Import recent games</button><p role="status">${escapeHtml(state.batchMessage)}</p></section>
+      </div>
+    </main>
+    <footer class="local-status"><span>Scheduler: pct-sm2-1 · Profile: profile-1</span><span>Rebuilt from immutable local events</span></footer>
+  </div>`;
+}
+
+async function refreshTraining(): Promise<void> {
+  const [drills, profile, resources, batches] = await Promise.all([loadDrills(), loadProfile(), loadResources(), loadBatches()]);
+  state.drills = drills;
+  state.profile = profile;
+  state.resources = resources;
+  state.batches = batches.batches;
+  state.queuePaused = batches.paused;
+  state.cacheHits = batches.cache_hits;
+  if (!state.activeDrill && drills[0]) state.activeDrill = drills[0].id;
+  state.shownHint = drills.find((drill) => drill.id === state.activeDrill)?.hint_level ?? 0;
+}
+
+async function activateDrillSession(): Promise<void> {
+  if (!state.activeDrill) return;
+  const updated = await beginDrillSession(state.activeDrill);
+  state.drills = state.drills.map((drill) => drill.id === updated.id ? updated : drill);
+  state.shownHint = updated.hint_level;
+  state.drillStartedAt = Date.now();
+  render();
+}
+
+function bindTrainingEvents(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((button) => button.addEventListener("click", () => { state.mode = button.dataset.mode as AppMode; render(); if (state.mode === "training") void activateDrillSession(); }));
+  document.querySelectorAll<HTMLButtonElement>("[data-drill]").forEach((button) => button.addEventListener("click", () => { state.activeDrill = button.dataset.drill ?? ""; state.showPunishment = false; state.attemptMessage = ""; render(); void activateDrillSession(); }));
+  document.querySelectorAll<HTMLButtonElement>("[data-resource]").forEach((button) => button.addEventListener("click", async () => { await completeResource(button.dataset.resource ?? ""); await refreshTraining(); render(); }));
+  document.querySelector<HTMLButtonElement>("[data-queue-action]")?.addEventListener("click", async (event) => {
+    const paused = (event.currentTarget as HTMLButtonElement).dataset.queueAction === "pause";
+    await setQueuePaused(paused);
+    await refreshTraining();
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("[data-batch]")?.addEventListener("click", async () => {
+    const raw = document.querySelector<HTMLTextAreaElement>("#batch-pgns")?.value ?? "";
+    const pgns = raw.split(/^---$/m).map((value) => value.trim()).filter(Boolean);
+    const urls = (document.querySelector<HTMLTextAreaElement>("#batch-urls")?.value ?? "").split(/\s+/).map((value) => value.trim()).filter(Boolean);
+    try { const result = await importBatch(pgns, urls); state.batchMessage = `${result.imported} imported, ${result.duplicates} duplicates, ${result.queued} queued, ${result.failed} failed.`; await refreshTraining(); }
+    catch (error) { state.batchMessage = error instanceof Error ? error.message : "Batch import failed."; }
+    render();
+  });
+}
+
 function importDialogMarkup(): string {
   return `<dialog id="import-dialog"><form method="dialog" class="dialog-shell"><header><h2>Import a game</h2><button value="cancel" aria-label="Close">×</button></header>
     <label>Chess.com game URL<input id="game-url" type="url" placeholder="https://www.chess.com/game/live/…" autocomplete="url"></label>
@@ -248,6 +417,11 @@ function importDialogMarkup(): string {
 }
 
 function bindEvents(): void {
+  document.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+    state.mode = button.dataset.mode as AppMode;
+    render();
+    if (state.mode === "training") void activateDrillSession();
+  }));
   const importBar = document.querySelector<HTMLButtonElement>("#open-import");
   importBar?.addEventListener("click", () => {
     document.querySelector<HTMLDialogElement>("#import-dialog")?.showModal();
@@ -373,7 +547,10 @@ function connectProgress(): void {
       : message.jobs.find((candidate) => !state.game || candidate.game_id === state.game.game.id);
     if (!job || (state.game && job.game_id !== state.game.game.id)) return;
     state.job = job;
-    if (job.status === "complete") void refreshGame();
+    if (job.status === "complete") {
+      void refreshGame();
+      void refreshTraining();
+    }
     else render();
   });
   socket.addEventListener("close", () => window.setTimeout(connectProgress, 1500));
@@ -383,7 +560,7 @@ async function start(): Promise<void> {
   render();
   connectProgress();
   try {
-    const games = await listGames();
+    const [games] = await Promise.all([listGames(), refreshTraining()]);
     if (games[0]) {
       state.game = await loadGame(games[0].game.id);
       state.selectedPly = Math.max(0, state.game.game.plies.length - 1);

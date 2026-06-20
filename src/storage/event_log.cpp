@@ -1,6 +1,7 @@
 #include "pct/storage/event_log.hpp"
 
 #include "pct/common/error.hpp"
+#include "pct/common/json.hpp"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -11,12 +12,12 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <set>
 
 namespace pct::storage {
 namespace {
 
 constexpr std::uint32_t magic = 0x45544350U; // PCTE in little-endian byte order.
-constexpr std::uint16_t current_schema = 1;
 constexpr std::size_t header_size = 32;
 constexpr std::size_t checksum_size = 4;
 constexpr std::size_t minimum_record_size = header_size + checksum_size;
@@ -123,7 +124,7 @@ Event EventLog::append(EventType type, std::string payload,
                        std::chrono::system_clock::time_point timestamp) {
     std::lock_guard lock(mutex_);
     Event event{
-        current_schema, type, next_id_,
+        current_schema_version, type, next_id_,
         std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch()).count(),
         std::move(payload)};
     const std::vector<std::byte> record = serialize(event);
@@ -201,7 +202,7 @@ ReplayResult EventLog::replay_unlocked() const {
             offset += record_size;
             continue;
         }
-        if (schema != current_schema) {
+        if (schema == 0 || schema > current_schema_version) {
             result.corruptions.push_back(Corruption{offset, "record schema is unsupported"});
             prefix_intact = false;
             offset += record_size;
@@ -231,6 +232,128 @@ bool EventLog::recover_trailing_record() {
     return true;
 }
 
+std::size_t EventLog::compact(const std::function<void(CompactionStage)>& stage_hook) {
+    std::lock_guard lock(mutex_);
+    ReplayResult state = replay_unlocked();
+    if (!state.corruptions.empty() || state.truncated_tail)
+        throw Error(ErrorCode::IoError, "cannot compact an invalid event log");
+    const std::size_t source_event_count = state.events.size();
+    const bool had_legacy_schema = std::any_of(
+        state.events.begin(), state.events.end(),
+        [](const Event& event) { return event.schema_version < current_schema_version; });
+    std::vector<Event> retained;
+    std::set<std::string> job_games;
+    std::set<std::string> completed_resources;
+    std::set<std::string> drill_sessions;
+    std::set<std::string> completed_analyses;
+    std::set<std::string> shallow_analyses;
+    bool kept_snapshot = false;
+    bool kept_queue_state = false;
+    bool kept_migration = false;
+    for (auto iterator = state.events.rbegin(); iterator != state.events.rend(); ++iterator) {
+        bool keep = true;
+        try {
+            if (iterator->type == EventType::AnalysisCompleted) {
+                const std::string game_id =
+                    json::parse(iterator->payload).at("game_id").as_string();
+                completed_analyses.insert(game_id);
+            } else if (iterator->type == EventType::ShallowAnalysisCompleted) {
+                const std::string game_id =
+                    json::parse(iterator->payload).at("game_id").as_string();
+                keep = !completed_analyses.contains(game_id) &&
+                       shallow_analyses.insert(game_id).second;
+            } else if (iterator->type == EventType::AnalysisJobStateChanged) {
+                const std::string game_id = json::parse(iterator->payload).at("game_id").as_string();
+                keep = job_games.insert(game_id).second;
+            } else if (iterator->type == EventType::ResourceCompleted) {
+                const std::string resource_id =
+                    json::parse(iterator->payload).at("resource_id").as_string();
+                keep = completed_resources.insert(resource_id).second;
+            } else if (iterator->type == EventType::DrillSessionUpdated) {
+                const std::string drill_id =
+                    json::parse(iterator->payload).at("drill_id").as_string();
+                keep = drill_sessions.insert(drill_id).second;
+            } else if (iterator->type == EventType::ProfileSnapshotCreated) {
+                keep = !kept_snapshot;
+                kept_snapshot = true;
+            } else if (iterator->type == EventType::BatchStateChanged) {
+                keep = !kept_queue_state;
+                kept_queue_state = true;
+            } else if (iterator->type == EventType::SchemaMigrated) {
+                keep = !kept_migration;
+                kept_migration = true;
+            } else if (iterator->type == EventType::LogCompacted) {
+                keep = false;
+            }
+        } catch (const std::exception&) {
+            keep = true;
+        }
+        if (keep)
+            retained.push_back(*iterator);
+    }
+    std::reverse(retained.begin(), retained.end());
+    state.events = std::move(retained);
+    std::uint64_t next_new_id = next_id_;
+    if (had_legacy_schema) {
+        state.events.push_back(Event{current_schema_version, EventType::SchemaMigrated,
+                                     next_new_id++,
+                                     std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count(),
+                                     "{\"from_schema\":1,\"to_schema\":" +
+                                         std::to_string(current_schema_version) + "}"});
+    }
+    Event compacted{current_schema_version, EventType::LogCompacted, next_new_id,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count(),
+                    "{\"source_events\":" + std::to_string(source_event_count) +
+                        ",\"retained_events\":" + std::to_string(state.events.size()) + "}"};
+    state.events.push_back(compacted);
+    const std::filesystem::path temporary = path_.string() + ".compact.tmp";
+    const int descriptor = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (descriptor < 0)
+        throw Error(ErrorCode::IoError, "failed to create compacted event log");
+    try {
+        for (Event event : state.events) {
+            event.schema_version = current_schema_version;
+            const auto record = serialize(event);
+            std::size_t offset = 0;
+            while (offset < record.size()) {
+                const ssize_t written = write(descriptor, record.data() + offset, record.size() - offset);
+                if (written < 0)
+                    throw Error(ErrorCode::IoError, "failed to write compacted event log");
+                offset += static_cast<std::size_t>(written);
+            }
+        }
+        if (fsync(descriptor) != 0)
+            throw Error(ErrorCode::IoError, "failed to sync compacted event log");
+        close(descriptor);
+    } catch (...) {
+        close(descriptor);
+        std::filesystem::remove(temporary);
+        throw;
+    }
+    if (stage_hook)
+        stage_hook(CompactionStage::TemporaryWritten);
+    EventLog validation(temporary);
+    const ReplayResult verified = validation.replay();
+    if (!verified.corruptions.empty() || verified.truncated_tail ||
+        verified.events.size() != state.events.size()) {
+        std::filesystem::remove(temporary);
+        throw Error(ErrorCode::IoError, "compacted event log failed validation");
+    }
+    if (stage_hook)
+        stage_hook(CompactionStage::Validated);
+    if (stage_hook)
+        stage_hook(CompactionStage::BeforeReplace);
+    std::filesystem::rename(temporary, path_);
+    next_id_ = next_new_id + 1;
+    if (stage_hook)
+        stage_hook(CompactionStage::Replaced);
+    return state.events.size();
+}
+
 std::string_view name(EventType type) {
     switch (type) {
     case EventType::GameImported:
@@ -247,6 +370,19 @@ std::string_view name(EventType type) {
         return "ExplanationCreated";
     case EventType::AnalysisCompleted:
         return "AnalysisCompleted";
+    case EventType::DrillCreated: return "DrillCreated";
+    case EventType::DrillAttempted: return "DrillAttempted";
+    case EventType::ResourceRecommended: return "ResourceRecommended";
+    case EventType::ResourceCompleted: return "ResourceCompleted";
+    case EventType::RatingObserved: return "RatingObserved";
+    case EventType::ProfileSnapshotCreated: return "ProfileSnapshotCreated";
+    case EventType::SchemaMigrated: return "SchemaMigrated";
+    case EventType::LogCompacted: return "LogCompacted";
+    case EventType::BatchCreated: return "BatchCreated";
+    case EventType::BatchStateChanged: return "BatchStateChanged";
+    case EventType::AnalysisJobStateChanged: return "AnalysisJobStateChanged";
+    case EventType::DrillSessionUpdated: return "DrillSessionUpdated";
+    case EventType::ShallowAnalysisCompleted: return "ShallowAnalysisCompleted";
     }
     return "Unknown";
 }

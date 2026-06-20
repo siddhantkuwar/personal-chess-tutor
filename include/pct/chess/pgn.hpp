@@ -3,6 +3,7 @@
 #include "pct/chess/board.hpp"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,8 @@ struct Ply {
     std::string san;
     std::string fen_before;
     std::string fen_after;
+    std::optional<std::int64_t> clock_ms;
+    std::optional<std::int64_t> elapsed_ms;
 };
 
 struct Game {

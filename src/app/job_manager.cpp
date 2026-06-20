@@ -4,12 +4,31 @@
 #include "pct/common/log.hpp"
 
 #include <algorithm>
+#include <cctype>
 
 namespace pct::app {
+namespace {
+
+std::string recency_key(const StoredGame& game) {
+    std::string value = game.imported.game.tag("UTCDate");
+    if (value.empty())
+        value = game.imported.game.tag("Date");
+    value += game.imported.game.tag("UTCTime");
+    value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char character) {
+                    return !std::isdigit(character);
+                }),
+                value.end());
+    return value.empty() ? std::to_string(game.imported_at_ms) : value;
+}
+
+} // namespace
 
 JobManager::JobManager(Repository& repository, analysis::Analyzer& analyzer)
-    : repository_(repository), analyzer_(analyzer),
-      worker_([this](std::stop_token token) { work(token); }) {}
+    : repository_(repository), analyzer_(analyzer), paused_(repository.background_paused()) {
+    for (const auto& game_id : repository_.recoverable_analysis_jobs())
+        static_cast<void>(start(game_id));
+    worker_ = std::jthread([this](std::stop_token token) { work(token); });
+}
 
 JobManager::~JobManager() {
     worker_.request_stop();
@@ -17,28 +36,77 @@ JobManager::~JobManager() {
 }
 
 AnalysisJob JobManager::start(std::string game_id) {
-    if (!repository_.get(game_id))
-        throw Error(ErrorCode::NotFound, "game does not exist");
-    AnalysisJob result;
+    return start_batch(std::vector<std::string>{std::move(game_id)}).front();
+}
+
+std::vector<AnalysisJob> JobManager::start_batch(const std::vector<std::string>& game_ids) {
+    struct Input {
+        std::string game_id;
+        bool has_shallow{false};
+        bool complete{false};
+        std::string recency;
+    };
+    std::vector<Input> inputs;
+    inputs.reserve(game_ids.size());
+    for (const auto& game_id : game_ids) {
+        const auto stored = repository_.get(game_id);
+        if (!stored)
+            throw Error(ErrorCode::NotFound, "game does not exist");
+        inputs.push_back(Input{game_id, stored->shallow_analysis.has_value(),
+                               stored->analysis.has_value(), recency_key(*stored)});
+    }
+    std::stable_sort(inputs.begin(), inputs.end(), [](const Input& left, const Input& right) {
+        if (left.complete != right.complete)
+            return !left.complete;
+        return left.recency > right.recency;
+    });
+    std::vector<AnalysisJob> results;
+    std::vector<AnalysisJob> created;
     {
         std::lock_guard lock(mutex_);
-        for (const auto& [_, job] : jobs_) {
-            if (job.game_id == game_id &&
-                (job.status == JobStatus::Queued || job.status == JobStatus::Running ||
-                 job.status == JobStatus::Complete)) {
-                return job;
+        std::vector<Task> shallow_tasks;
+        std::vector<Task> deep_tasks;
+        for (const auto& input : inputs) {
+            const auto& game_id = input.game_id;
+            const auto existing = std::find_if(jobs_.begin(), jobs_.end(), [&](const auto& entry) {
+                const auto& job = entry.second;
+                return job.game_id == game_id &&
+                       (job.status == JobStatus::Queued || job.status == JobStatus::Running ||
+                        job.status == JobStatus::Complete);
+            });
+            if (existing != jobs_.end()) {
+                results.push_back(existing->second);
+                continue;
             }
+            AnalysisJob result;
+            result.id = next_id_++;
+            result.game_id = game_id;
+            result.status = input.complete ? JobStatus::Complete : JobStatus::Queued;
+            result.progress = input.complete
+                                  ? analysis::Progress{analysis::AnalysisStage::Complete, 1, 1,
+                                                       "Loaded from storage"}
+                                  : analysis::Progress{
+                                        input.has_shallow ? analysis::AnalysisStage::DeepAnalysis
+                                                          : analysis::AnalysisStage::Parsing,
+                                        0, 1, input.has_shallow ? "Deep analysis queued"
+                                                                : "Shallow analysis queued"};
+            jobs_.emplace(result.id, result);
+            if (!input.complete) {
+                (input.has_shallow ? deep_tasks : shallow_tasks)
+                    .push_back(Task{result.id, input.has_shallow});
+            }
+            created.push_back(result);
+            results.push_back(result);
         }
-        result.id = next_id_++;
-        result.game_id = std::move(game_id);
-        result.status = JobStatus::Queued;
-        result.progress = analysis::Progress{analysis::AnalysisStage::Parsing, 0, 1, "Queued"};
-        jobs_.emplace(result.id, result);
-        queue_.push_back(result.id);
+        queue_.insert(queue_.end(), shallow_tasks.begin(), shallow_tasks.end());
+        queue_.insert(queue_.end(), deep_tasks.begin(), deep_tasks.end());
     }
-    condition_.notify_one();
-    notify(result);
-    return result;
+    condition_.notify_all();
+    for (const auto& job : created) {
+        repository_.record_job_state(job.game_id, std::string(name(job.status)));
+        notify(job);
+    }
+    return results;
 }
 
 bool JobManager::cancel(std::uint64_t job_id) {
@@ -57,6 +125,7 @@ bool JobManager::cancel(std::uint64_t job_id) {
         snapshot = found->second;
     }
     condition_.notify_all();
+    repository_.record_job_state(snapshot.game_id, std::string(name(snapshot.status)));
     notify(snapshot);
     return true;
 }
@@ -78,6 +147,28 @@ std::vector<AnalysisJob> JobManager::list() const {
     return result;
 }
 
+void JobManager::pause() {
+    {
+        std::lock_guard lock(mutex_);
+        paused_ = true;
+    }
+    repository_.set_background_paused(true);
+}
+
+void JobManager::resume() {
+    {
+        std::lock_guard lock(mutex_);
+        paused_ = false;
+    }
+    repository_.set_background_paused(false);
+    condition_.notify_all();
+}
+
+bool JobManager::paused() const {
+    std::lock_guard lock(mutex_);
+    return paused_;
+}
+
 void JobManager::set_observer(JobObserver observer) {
     std::lock_guard lock(mutex_);
     observer_ = std::move(observer);
@@ -95,19 +186,22 @@ void JobManager::notify(const AnalysisJob& job) {
 
 void JobManager::work(std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
-        std::uint64_t id = 0;
+        Task task;
         {
             std::unique_lock lock(mutex_);
-            condition_.wait(lock, stop_token, [&] { return !queue_.empty(); });
+            condition_.wait(lock, stop_token, [&] { return !paused_ && !queue_.empty(); });
             if (stop_token.stop_requested())
                 return;
-            id = queue_.front();
+            task = queue_.front();
             queue_.pop_front();
-            auto found = jobs_.find(id);
+            auto found = jobs_.find(task.job_id);
             if (found == jobs_.end() || found->second.status == JobStatus::Cancelled)
                 continue;
             found->second.status = JobStatus::Running;
         }
+        const std::uint64_t id = task.job_id;
+        if (const auto job = get(id))
+            repository_.record_job_state(job->game_id, "running");
         if (const auto job = get(id))
             notify(*job);
 
@@ -123,8 +217,8 @@ void JobManager::work(std::stop_token stop_token) {
                 jobs_.at(id).status = JobStatus::Complete;
                 jobs_.at(id).progress = analysis::Progress{analysis::AnalysisStage::Complete, 1, 1,
                                                            "Loaded from storage"};
-            } else {
-                const analysis::GameAnalysis result = analyzer_.analyze(
+            } else if (!task.deep) {
+                const analysis::GameAnalysis shallow = analyzer_.analyze_shallow(
                     stored->imported.game,
                     [this, id](const analysis::Progress& progress) {
                         AnalysisJob snapshot;
@@ -133,6 +227,40 @@ void JobManager::work(std::stop_token stop_token) {
                             auto& job = jobs_.at(id);
                             job.progress = progress;
                             snapshot = job;
+                        }
+                        notify(snapshot);
+                    },
+                    job->cancellation.get_token());
+                repository_.save_shallow_analysis(shallow);
+                AnalysisJob snapshot;
+                {
+                    std::lock_guard lock(mutex_);
+                    auto& queued = jobs_.at(id);
+                    queued.status = JobStatus::Queued;
+                    queued.progress = analysis::Progress{analysis::AnalysisStage::DeepAnalysis,
+                                                         0, 1, "Deep analysis queued"};
+                    queue_.push_back(Task{id, true});
+                    snapshot = queued;
+                }
+                repository_.record_job_state(snapshot.game_id, "queued");
+                notify(snapshot);
+                condition_.notify_all();
+                continue;
+            } else {
+                analysis::GameAnalysis shallow =
+                    stored->shallow_analysis
+                        ? *stored->shallow_analysis
+                        : analyzer_.analyze_shallow(stored->imported.game, {},
+                                                    job->cancellation.get_token());
+                const analysis::GameAnalysis result = analyzer_.analyze_deep(
+                    stored->imported.game, std::move(shallow),
+                    [this, id](const analysis::Progress& progress) {
+                        AnalysisJob snapshot;
+                        {
+                            std::lock_guard lock(mutex_);
+                            auto& current = jobs_.at(id);
+                            current.progress = progress;
+                            snapshot = current;
                         }
                         notify(snapshot);
                     },
@@ -161,8 +289,10 @@ void JobManager::work(std::stop_token stop_token) {
             job.error = error.what();
             log(LogLevel::Error, "jobs", "analysis job failed: " + job.error);
         }
-        if (const auto job = get(id))
+        if (const auto job = get(id)) {
+            repository_.record_job_state(job->game_id, std::string(name(job->status)));
             notify(*job);
+        }
     }
 }
 
