@@ -33,6 +33,20 @@ interface State {
 
 const initialFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const blackPieces = new Set(["♟", "♜", "♞", "♝", "♛", "♚"]);
+const pieceKinds: Record<string, string> = {
+  "♔": "king",
+  "♕": "queen",
+  "♖": "rook",
+  "♗": "bishop",
+  "♘": "knight",
+  "♙": "pawn",
+  "♚": "king",
+  "♛": "queen",
+  "♜": "rook",
+  "♝": "bishop",
+  "♞": "knight",
+  "♟": "pawn",
+};
 const state: State = {
   game: null,
   selectedPly: 0,
@@ -125,16 +139,38 @@ function boardMarkup(): string {
       ${squares.map((square, index) => {
         const light = (Math.floor(index / 8) + index) % 2 === 0;
         const selected = highlighted?.includes(square.name) ?? false;
-        const pieceTone = square.piece ? (blackPieces.has(square.piece) ? "black-piece" : "white-piece") : "";
-        return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell" data-square="${square.name}">
+        const moveClass = highlighted?.[0] === square.name ? "from-square" : highlighted?.[1] === square.name ? "to-square" : "";
+        return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""} ${moveClass}" role="gridcell" data-square="${square.name}">
           ${square.file === "a" ? `<span class="rank-coordinate">${square.rank}</span>` : ""}
           ${square.rank === "1" ? `<span class="file-coordinate">${square.file}</span>` : ""}
-          <span class="piece ${pieceTone}" aria-label="${square.piece ? `piece on ${square.name}` : `empty ${square.name}`}">${square.piece}</span>
+          ${pieceMarkup(square.piece, square.name)}
         </div>`;
       }).join("")}
       ${arrowMarkup(highlighted)}
     </div>
   </div>`;
+}
+
+function pieceMarkup(piece: string, squareName: string): string {
+  if (!piece) return `<span class="piece empty-piece" aria-label="empty ${squareName}"></span>`;
+  const pieceTone = blackPieces.has(piece) ? "black-piece" : "white-piece";
+  const kind = pieceKinds[piece] ?? "pawn";
+  const title = `${kind} on ${squareName}`;
+  return `<span class="piece ${pieceTone}" aria-label="${title}">${pieceSvg(kind)}</span>`;
+}
+
+function pieceSvg(kind: string): string {
+  const common = `viewBox="0 0 64 64" aria-hidden="true" focusable="false"`;
+  const base = `<path class="piece-base" d="M18 53h28M22 47h20M25 41h14"/>`;
+  const map: Record<string, string> = {
+    pawn: `<svg ${common}><circle cx="32" cy="19" r="8"/><path d="M24 42c1.4-10.2 4.1-15 8-15s6.6 4.8 8 15Z"/>${base}</svg>`,
+    rook: `<svg ${common}><path d="M20 14h7v6h10v-6h7v14H20Z"/><path d="M23 28h18l-3 14H26Z"/>${base}</svg>`,
+    knight: `<svg ${common}><path d="M21 43c3.2-14.6 12.2-25.2 24-29 .7 7.5-1.1 13.5-5.3 18l4.3 10H30l-5 5Z"/><path d="M34 19l-3 4 5 1"/><circle cx="39" cy="22" r="1.6"/>${base}</svg>`,
+    bishop: `<svg ${common}><circle cx="32" cy="13" r="5"/><path d="M24 42c1.2-12.8 3.9-22 8-22s6.8 9.2 8 22Z"/><path d="M35 21 28 34"/>${base}</svg>`,
+    queen: `<svg ${common}><path d="M17 24 23 13l6 12 3-14 3 14 6-12 6 11-7 18H24Z"/><circle cx="17" cy="23" r="3"/><circle cx="23" cy="13" r="3"/><circle cx="32" cy="11" r="3"/><circle cx="41" cy="13" r="3"/><circle cx="47" cy="23" r="3"/>${base}</svg>`,
+    king: `<svg ${common}><path d="M32 9v12M26 15h12"/><path d="M22 42c1.5-11.5 5.4-18 10-18s8.5 6.5 10 18Z"/><path d="M25 24h14"/>${base}</svg>`,
+  };
+  return map[kind] ?? map.pawn;
 }
 
 function arrowMarkup(highlighted: [string, string] | null): string {
@@ -320,8 +356,7 @@ function trainingBoardMarkup(drill: Drill | undefined): string {
   return `<div class="training-board board" role="grid" aria-label="Drill position">${squaresFromFen(fen).map((square, index) => {
     const light = (Math.floor(index / 8) + index) % 2 === 0;
     const selected = highlighted?.includes(square.name) ?? false;
-    const pieceTone = square.piece ? (blackPieces.has(square.piece) ? "black-piece" : "white-piece") : "";
-    return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell"><span class="piece ${pieceTone}">${square.piece}</span></div>`;
+    return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected from-square" : ""}" role="gridcell">${pieceMarkup(square.piece, square.name)}</div>`;
   }).join("")}</div>`;
 }
 
@@ -353,7 +388,7 @@ function trainingShellMarkup(): string {
   const due = state.drills.filter((candidate) => candidate.schedule.state === "due" || candidate.schedule.state === "new").length;
   const hint = !drill ? "" : state.shownHint === 0 ? "No hint yet. First identify what changed and calculate forcing moves." : state.shownHint === 1 ? "The relevant piece's starting square is highlighted." : state.shownHint === 2 ? `Candidate moves: ${drill.solutions.join(", ")}` : `Solution: ${drill.solutions[0]}. ${drill.explanation}`;
   const hintAvailable = Boolean(drill && state.shownHint < drill.available_hint_level);
-  return `<div class="learning-shell">
+  return `<div class="learning-shell ${state.mode}">
     <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game">${icons.book}<span>Study</span></button><button data-mode="training" class="${state.mode === "training" ? "active" : ""}">${icons.chevron}<span>Train</span></button><button data-mode="progress" class="${state.mode === "progress" ? "active" : ""}">${icons.chart}<span>Progress</span></button></nav></header>
     <main class="learning-main">
       <header class="learning-heading"><div><p class="overline">Personalized training · ${due} ready today</p><h1>${state.mode === "training" ? "Turn mistakes into stronger habits." : "Progress you can trace back to games."}</h1></div><p>Every count comes from your local event log. No composite score.</p></header>

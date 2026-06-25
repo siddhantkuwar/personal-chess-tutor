@@ -18,9 +18,11 @@
   --accent-soft: rgba(47, 180, 242, .16);
   --gold: #ffdf46;
   --danger: #ff5b51;
-  --board-light: #b3aa9d;
-  --board-dark: #999186;
-  --board-frame: #1b1916;
+  --board-light: #b8b0a3;
+  --board-dark: #948d82;
+  --board-frame: #181613;
+  --content-width: 1240px;
+  --board-size: 612px;
   --display: "Imperator", "Cinzel", "Cormorant Garamond", Georgia, serif;
   --sans: "Google Sans", "Product Sans", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
   --shadow: 0 34px 120px rgba(0, 0, 0, .42);
@@ -79,7 +81,7 @@ svg {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: 82px 58px minmax(0, 1fr) 42px;
+  grid-template-rows: 78px 52px minmax(0, 1fr) 42px;
   position: relative;
 }
 
@@ -87,7 +89,8 @@ svg {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 clamp(24px, 4vw, 64px);
+  width: min(var(--content-width), calc(100vw - 64px));
+  margin: 0 auto;
 }
 
 .brand {
@@ -152,9 +155,9 @@ svg {
 
 .import-bar {
   justify-self: start;
-  width: min(520px, calc(100vw - 48px));
+  width: 372px;
   min-height: 42px;
-  margin-left: clamp(24px, 4vw, 64px);
+  margin-left: max(32px, calc((100vw - var(--content-width)) / 2));
   display: flex;
   align-items: center;
   gap: 12px;
@@ -194,13 +197,15 @@ svg {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(210px, 280px) minmax(520px, 704px) minmax(260px, 320px);
+  grid-template-columns: 244px minmax(0, var(--board-size)) 282px;
   grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "summary board review";
   align-items: center;
   justify-content: center;
-  gap: clamp(28px, 4vw, 76px);
-  padding: 12px clamp(24px, 4vw, 64px) 30px;
+  gap: 54px;
+  width: min(var(--content-width), calc(100vw - 64px));
+  margin: 0 auto;
+  padding: 8px 0 28px;
 }
 
 .summary-region,
@@ -210,10 +215,11 @@ svg {
 }
 .summary-region {
   grid-area: summary;
-  align-self: stretch;
+  align-self: center;
   display: grid;
   align-content: center;
   gap: 30px;
+  min-height: var(--board-size);
 }
 .board-region {
   grid-area: board;
@@ -242,7 +248,7 @@ svg {
 .players h2 {
   margin: 0;
   color: var(--text);
-  font: 400 clamp(34px, 4.2vw, 66px)/.96 var(--display);
+  font: 400 clamp(38px, 4vw, 58px)/.94 var(--display);
   font-variant: small-caps;
   letter-spacing: .018em;
 }
@@ -325,13 +331,13 @@ svg {
 }
 
 .board-wrap {
-  width: min(100%, 704px, calc(100vh - 230px));
+  width: min(100%, var(--board-size), calc(100vh - 232px));
   aspect-ratio: 1;
   margin: 0 auto;
-  padding: 18px;
-  border-radius: 8px;
+  padding: 10px;
+  border-radius: 7px;
   background: var(--board-frame);
-  box-shadow: var(--shadow);
+  box-shadow: 0 30px 90px rgba(0,0,0,.36);
 }
 .board {
   position: relative;
@@ -358,25 +364,43 @@ svg {
   background: rgba(47, 180, 242, .26);
   box-shadow: inset 0 0 0 3px rgba(47, 180, 242, .92);
 }
-.square.selected:nth-child(4n)::after {
-  background: rgba(255, 91, 81, .82);
-  box-shadow: none;
+.square.to-square::after {
+  background: rgba(245, 239, 226, .36);
+  box-shadow: inset 0 0 0 3px rgba(245, 239, 226, .86);
 }
 .piece {
   position: relative;
   z-index: 1;
-  font-family: "Apple Symbols", "Arial Unicode MS", "Noto Sans Symbols 2", serif;
-  font-size: clamp(38px, 5.8vw, 82px);
-  line-height: 1;
-  transform: translateY(-1%);
+  display: grid;
+  place-items: center;
+  width: 72%;
+  height: 72%;
+  color: currentColor;
+}
+.piece svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 2.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.piece .piece-base {
+  fill: none;
+  stroke-width: 3.2;
 }
 .piece.white-piece {
-  color: #fffaf0;
-  text-shadow: 0 2px 0 rgba(0,0,0,.16), 0 10px 18px rgba(0,0,0,.14);
+  color: #f9f3e8;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.24));
 }
 .piece.black-piece {
-  color: #050505;
-  text-shadow: 0 2px 0 rgba(255,255,255,.08), 0 10px 18px rgba(0,0,0,.2);
+  color: #090908;
+  filter: drop-shadow(0 2px 2px rgba(255,255,255,.06));
+}
+.empty-piece {
+  display: none;
 }
 .rank-coordinate,
 .file-coordinate {
@@ -404,13 +428,13 @@ svg {
 }
 
 .move-navigation {
-  width: min(100%, 704px);
-  min-height: 72px;
+  width: min(100%, var(--board-size));
+  min-height: 64px;
   display: grid;
   grid-template-columns: 42px 42px 1fr 42px 42px;
   gap: 8px;
   align-items: center;
-  padding-top: 18px;
+  padding-top: 13px;
 }
 .move-navigation button {
   height: 42px;
@@ -435,7 +459,7 @@ svg {
 .move-navigation strong {
   display: block;
   color: var(--text);
-  font: 400 clamp(24px, 2.3vw, 36px)/1 var(--display);
+  font: 400 clamp(24px, 2vw, 32px)/1 var(--display);
   font-style: italic;
   letter-spacing: .02em;
 }
@@ -544,7 +568,7 @@ svg {
 }
 
 .review-pane {
-  max-height: min(628px, calc(100vh - 220px));
+  height: min(var(--board-size), calc(100vh - 232px));
   display: flex;
   flex-direction: column;
   border: 1px solid var(--hairline);
@@ -709,7 +733,8 @@ svg {
   line-height: 1.4;
 }
 .review-empty {
-  min-height: 360px;
+  min-height: 0;
+  flex: 1;
   display: grid;
   place-items: center;
   align-content: center;
@@ -846,29 +871,29 @@ dialog::backdrop {
 .learning-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: 82px 1fr 42px;
+  grid-template-rows: 78px 1fr 42px;
   background:
-    radial-gradient(circle at 52% 10%, rgba(47,180,242,.12), transparent 32%),
-    var(--canvas);
+    radial-gradient(circle at 47% 42%, rgba(62, 70, 62, .28), transparent 32%),
+    radial-gradient(circle at 12% 76%, rgba(56, 30, 28, .3), transparent 34%),
+    linear-gradient(135deg, #171411 0%, #222521 48%, #0d0b0a 100%);
 }
 .learning-main {
-  width: min(1360px, calc(100% - 48px));
+  width: min(var(--content-width), calc(100vw - 64px));
   margin: 0 auto;
-  padding: 34px 0 64px;
+  padding: 18px 0 54px;
 }
 .learning-heading {
   display: flex;
   justify-content: space-between;
   align-items: end;
-  gap: 40px;
-  padding-bottom: 30px;
-  border-bottom: 1px solid var(--hairline);
+  gap: 36px;
+  padding-bottom: 24px;
 }
 .learning-heading h1 {
-  max-width: 790px;
-  margin: 7px 0 0;
+  max-width: 620px;
+  margin: 8px 0 0;
   color: var(--text);
-  font: 400 clamp(44px, 6vw, 86px)/.92 var(--display);
+  font: 400 clamp(38px, 5vw, 64px)/.94 var(--display);
   font-variant: small-caps;
   letter-spacing: .01em;
 }
@@ -889,11 +914,12 @@ dialog::backdrop {
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  border-bottom: 1px solid var(--hairline);
+  border: 1px solid var(--hairline);
+  background: rgba(7, 7, 6, .16);
 }
 .metric {
-  min-height: 122px;
-  padding: 24px 22px;
+  min-height: 104px;
+  padding: 20px 18px;
   border-right: 1px solid var(--hairline);
 }
 .metric:last-child {
@@ -902,7 +928,7 @@ dialog::backdrop {
 .metric strong {
   display: block;
   color: var(--text);
-  font: 400 48px/1 var(--display);
+  font: 400 40px/1 var(--display);
 }
 .metric span {
   display: block;
@@ -913,9 +939,27 @@ dialog::backdrop {
 .metric small { color: var(--muted); }
 .learning-grid {
   display: grid;
-  grid-template-columns: minmax(520px, 1.2fr) minmax(320px, .8fr);
-  gap: 22px;
-  padding-top: 24px;
+  grid-template-columns: minmax(520px, 676px) minmax(280px, 1fr);
+  align-items: start;
+  gap: 28px;
+  padding-top: 28px;
+}
+.learning-shell.training .learning-grid {
+  grid-template-columns: minmax(520px, 676px) minmax(280px, 352px);
+  justify-content: center;
+}
+.learning-shell.training .trend-panel,
+.learning-shell.training .weakness-panel,
+.learning-shell.training .resource-panel,
+.learning-shell.training .batch-panel {
+  display: none;
+}
+.learning-shell.progress .training-panel,
+.learning-shell.progress .queue-panel {
+  display: none;
+}
+.learning-shell.progress .learning-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .training-panel,
 .queue-panel,
@@ -924,11 +968,11 @@ dialog::backdrop {
 .resource-panel,
 .batch-panel {
   border: 1px solid var(--hairline);
-  background: rgba(0,0,0,.14);
+  background: rgba(7, 7, 6, .16);
 }
 .training-panel {
   grid-row: span 2;
-  padding: 22px;
+  padding: 20px;
 }
 .panel-title {
   display: flex;
@@ -939,18 +983,17 @@ dialog::backdrop {
 .panel-title h2 {
   margin: 4px 0 0;
   color: var(--text);
-  font: 400 34px/1.04 var(--display);
+  font: 400 30px/1.04 var(--display);
 }
 .training-board {
-  width: min(100%, 610px);
+  width: min(100%, 560px);
   height: auto;
   aspect-ratio: 1;
   margin: 0 auto;
 }
-.training-board .piece { font-size: clamp(28px, 4.8vw, 64px); }
 .coach-sequence {
-  width: min(100%, 610px);
-  margin: 22px auto 0;
+  width: min(100%, 560px);
+  margin: 18px auto 0;
 }
 .coach-sequence ol {
   display: grid;
@@ -960,7 +1003,7 @@ dialog::backdrop {
   list-style-position: inside;
 }
 .coach-sequence li {
-  min-height: 66px;
+  min-height: 58px;
   padding: 10px;
   border-top: 1px solid var(--accent);
   color: var(--muted);
@@ -1027,7 +1070,7 @@ dialog::backdrop {
 .trend-panel,
 .weakness-panel,
 .resource-panel,
-.batch-panel { padding: 22px; }
+.batch-panel { padding: 20px; }
 .drill-list {
   display: grid;
   gap: 8px;
@@ -1036,7 +1079,7 @@ dialog::backdrop {
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  min-height: 54px;
+  min-height: 50px;
   padding: 10px 12px;
   border: 1px solid var(--hairline);
   background: transparent;
@@ -1075,7 +1118,7 @@ dialog::backdrop {
   display: grid;
   grid-template-columns: repeat(14, minmax(8px, 1fr));
   gap: 5px;
-  height: 150px;
+  height: 132px;
   padding-top: 12px;
   border-top: 1px solid var(--hairline);
 }
@@ -1089,7 +1132,7 @@ dialog::backdrop {
   align-items: end;
   justify-content: center;
   gap: 2px;
-  min-height: 110px;
+  min-height: 94px;
 }
 .trend-bars i {
   width: min(7px, 30%);
@@ -1105,7 +1148,7 @@ dialog::backdrop {
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  padding: 14px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--hairline);
 }
 .weakness-row div {
@@ -1134,7 +1177,7 @@ dialog::backdrop {
   grid-template-columns: 1fr auto;
   gap: 16px;
   align-items: center;
-  padding: 16px 0;
+  padding: 14px 0;
   border-top: 1px solid var(--hairline);
 }
 .resource p {
@@ -1191,21 +1234,25 @@ dialog::backdrop {
 
 @media (max-width: 1180px) {
   .workspace {
-    grid-template-columns: minmax(180px, 240px) minmax(460px, 620px);
+    grid-template-columns: minmax(180px, 232px) minmax(460px, 588px);
     grid-template-areas: "summary board" "review board";
     align-content: center;
     align-items: start;
+    gap: 34px;
   }
   .review-region { align-self: stretch; }
   .review-pane { max-height: 330px; }
-  .board-wrap { width: min(100%, 620px, calc(100vh - 236px)); }
+  .board-wrap { width: min(100%, 588px, calc(100vh - 236px)); }
+  .summary-region { min-height: 0; }
 }
 
 @media (max-width: 900px) {
   .learning-heading { display: block; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .metric:nth-child(2) { border-right: 0; }
-  .learning-grid { grid-template-columns: 1fr; }
+  .learning-grid,
+  .learning-shell.training .learning-grid,
+  .learning-shell.progress .learning-grid { grid-template-columns: 1fr; }
   .training-panel { grid-row: auto; }
 }
 
@@ -1321,7 +1368,10 @@ dialog::backdrop {
     max-width: none;
     padding: 8px;
   }
-  .piece { font-size: clamp(30px, 11vw, 58px); }
+  .piece {
+    width: 74%;
+    height: 74%;
+  }
   .move-navigation {
     width: 100%;
     min-height: 82px;
