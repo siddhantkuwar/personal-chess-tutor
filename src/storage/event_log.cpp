@@ -133,26 +133,47 @@ Event EventLog::append(EventType type, std::string payload,
         throw Error(ErrorCode::IoError,
                     std::string("failed to open event log: ") + std::strerror(errno));
     }
-    std::size_t offset = 0;
-    while (offset < record.size()) {
-        const ssize_t written = write(descriptor, record.data() + offset, record.size() - offset);
-        if (written < 0) {
-            const int error = errno;
-            close(descriptor);
-            throw Error(ErrorCode::IoError,
-                        std::string("failed to append event: ") + std::strerror(error));
+    try {
+        if (append_fault_hook_)
+            append_fault_hook_(AppendStage::BeforeWrite);
+        std::size_t offset = 0;
+        const std::size_t first_target = append_fault_hook_ ? record.size() / 2 : record.size();
+        while (offset < first_target) {
+            const ssize_t written =
+                write(descriptor, record.data() + offset, first_target - offset);
+            if (written < 0)
+                throw Error(ErrorCode::IoError,
+                            std::string("failed to append event: ") + std::strerror(errno));
+            offset += static_cast<std::size_t>(written);
         }
-        offset += static_cast<std::size_t>(written);
-    }
-    if (fsync(descriptor) != 0) {
-        const int error = errno;
+        if (append_fault_hook_)
+            append_fault_hook_(AppendStage::AfterPartialWrite);
+        while (offset < record.size()) {
+            const ssize_t written = write(descriptor, record.data() + offset, record.size() - offset);
+            if (written < 0)
+                throw Error(ErrorCode::IoError,
+                            std::string("failed to append event: ") + std::strerror(errno));
+            offset += static_cast<std::size_t>(written);
+        }
+        if (append_fault_hook_)
+            append_fault_hook_(AppendStage::BeforeSync);
+        if (fsync(descriptor) != 0)
+            throw Error(ErrorCode::IoError,
+                        std::string("failed to sync event log: ") + std::strerror(errno));
+        ++next_id_;
+        if (append_fault_hook_)
+            append_fault_hook_(AppendStage::AfterSync);
         close(descriptor);
-        throw Error(ErrorCode::IoError,
-                    std::string("failed to sync event log: ") + std::strerror(error));
+    } catch (...) {
+        close(descriptor);
+        throw;
     }
-    close(descriptor);
-    ++next_id_;
     return event;
+}
+
+void EventLog::set_append_fault_hook(std::function<void(AppendStage)> hook) {
+    std::lock_guard lock(mutex_);
+    append_fault_hook_ = std::move(hook);
 }
 
 ReplayResult EventLog::replay() const {

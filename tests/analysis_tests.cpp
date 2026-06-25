@@ -2,6 +2,8 @@
 
 #include "pct/analysis/analyzer.hpp"
 
+#include <array>
+
 using namespace pct;
 
 namespace {
@@ -279,6 +281,27 @@ TEST_CASE("analysis cache ignores FEN move clocks") {
     cache.put(first, engine::AnalysisResult{{}, "e2e4", {}});
     engine::AnalysisResult found;
     CHECK(cache.get(same_position, found));
+}
+
+TEST_CASE("analysis cache is bounded and reports misses and evictions") {
+    analysis::AnalysisCache cache(2);
+    engine::AnalysisResult value;
+    const std::array<std::string, 3> positions{
+        "8/8/8/8/8/8/4K3/7k w - - 0 1",
+        "8/8/8/8/8/8/3K4/7k w - - 0 1",
+        "8/8/8/8/8/8/2K5/7k w - - 0 1",
+    };
+    for (const auto& position : positions) {
+        engine::AnalysisRequest request;
+        request.fen = position;
+        cache.put(request, engine::AnalysisResult{});
+    }
+    CHECK_EQ(cache.size(), 2ULL);
+    CHECK_EQ(cache.eviction_count(), 1ULL);
+    engine::AnalysisRequest missing;
+    missing.fen = "8/8/8/8/8/8/1K6/7k w - - 0 1";
+    CHECK(!cache.get(missing, value));
+    CHECK_EQ(cache.miss_count(), 1ULL);
 }
 
 TEST_CASE("split shallow and deep analysis matches the combined contract") {

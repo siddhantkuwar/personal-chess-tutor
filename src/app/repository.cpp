@@ -271,6 +271,12 @@ training::Drill drill_from_json(const json::Value& payload) {
     for (const auto& piece : payload.get("attacked_pieces", empty_pieces).as_array())
         drill.attacked_pieces.push_back(piece.as_string());
     drill.opponent_response = payload.get("opponent_response", drill.punishment).as_string();
+    drill.source_type = payload.get("source_type", "personal_game").as_string();
+    drill.provenance = payload.get("provenance", "").as_string();
+    drill.corpus_version = payload.get("corpus_version", "").as_string();
+    const json::Value empty_evidence{json::Value::Array{}};
+    for (const auto& evidence : payload.get("validation_evidence", empty_evidence).as_array())
+        drill.validation_evidence.push_back(evidence.as_string());
     return drill;
 }
 
@@ -627,30 +633,8 @@ void Repository::save_analysis(const analysis::GameAnalysis& analysis) {
         }
         if (drill.changed_threat.empty())
             drill.changed_threat = "The opponent's strongest reply is " + drill.punishment + ".";
-        json::Value::Array solutions;
-        for (const auto& solution : drill.solutions)
-            solutions.emplace_back(solution);
-        json::Value::Array attacked_pieces;
-        for (const auto& piece : drill.attacked_pieces)
-            attacked_pieces.emplace_back(piece);
         static_cast<void>(log_.append(
-            storage::EventType::DrillCreated,
-            json::dump(json::Value::Object{
-                {"id", drill.id}, {"source_game_id", drill.source_game_id},
-                {"source_ply", drill.source_ply}, {"fen", drill.fen},
-                {"category", drill.category}, {"phase", drill.phase},
-                {"explanation", drill.explanation}, {"punishment", drill.punishment},
-                {"solutions", std::move(solutions)}, {"difficulty", drill.difficulty},
-                {"impact_cp", drill.impact_cp},
-                {"created_at_ms", static_cast<double>(drill.created_at_ms)},
-                {"played_move", drill.played_move},
-                {"fen_after_mistake", drill.fen_after_mistake},
-                {"fen_after_punishment", drill.fen_after_punishment},
-                {"changed_threat", drill.changed_threat},
-                {"attacked_pieces", std::move(attacked_pieces)},
-                {"opponent_response", drill.opponent_response},
-                {"classifier_version", "taxonomy-2"},
-            })));
+            storage::EventType::DrillCreated, json::dump(training::to_json(drill, now))));
         drills_.emplace(id, std::move(drill));
     }
     found->second.analysis = analysis;
@@ -686,6 +670,29 @@ std::optional<StoredGame> Repository::get(std::string_view id) const {
     if (found == games_.end())
         return std::nullopt;
     return found->second;
+}
+
+bool Repository::add_validated_drill(training::Drill drill) {
+    std::lock_guard lock(mutex_);
+    if (drill.id.empty() || drill.fen.empty() || drill.solutions.empty() ||
+        drill.validation_evidence.empty())
+        throw Error(ErrorCode::InvalidArgument, "validated drill evidence is incomplete");
+    if (drills_.contains(drill.id))
+        return false;
+    chess::Board board = chess::Board::from_fen(drill.fen);
+    for (const auto& solution : drill.solutions)
+        if (!parse_uci(board, solution))
+            throw Error(ErrorCode::IllegalMove, "validated drill contains an illegal solution");
+    if (drill.created_at_ms == 0) {
+        drill.created_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    }
+    static_cast<void>(log_.append(storage::EventType::DrillCreated,
+                                  json::dump(training::to_json(drill, drill.created_at_ms))));
+    drills_.emplace(drill.id, std::move(drill));
+    rebuild_indexes();
+    return true;
 }
 
 std::vector<StoredGame> Repository::list() const {

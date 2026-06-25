@@ -1,0 +1,15 @@
+{
+  "schema": "pct-performance-targets-1",
+  "workload": "1000 synthetic games on a supported Apple Silicon Mac",
+  "targets": {
+    "cold_start_ms": 500,
+    "api_read_p95_ms": 50,
+    "interactive_queue_p95_ms": 100,
+    "navigation_p95_ms": 16,
+    "resident_memory_mb": 512,
+    "analysis_cache_entries": 50000,
+    "pending_engine_requests": 256,
+    "pending_game_jobs": 256
+  },
+  "variance_policy": "Microbenchmarks may vary by 20 percent across supported Macs; correctness counts must match exactly."
+}

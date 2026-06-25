@@ -37,6 +37,7 @@ class Repository {
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] std::vector<training::Drill> drills(std::int64_t now_ms) const;
     [[nodiscard]] std::optional<training::Drill> drill(std::string_view id) const;
+    [[nodiscard]] bool add_validated_drill(training::Drill drill);
     [[nodiscard]] training::DrillAttempt record_attempt(std::string_view drill_id,
                                                         std::string move,
                                                         std::uint64_t response_time_ms,

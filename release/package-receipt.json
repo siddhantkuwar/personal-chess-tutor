@@ -1,0 +1,14 @@
+{
+  "version": "0.3.0",
+  "captured_at": "2026-06-24T22:54:57-07:00",
+  "artifact": "Personal-Chess-Tutor-macOS.zip",
+  "architecture": "arm64",
+  "bytes": 539992,
+  "sha256": "0263ac90213f560d52ed2045e7ad1fd257719e2f0090f2806bf63c91d750a715",
+  "plist_validation": "passed",
+  "archive_validation": "passed",
+  "packaged_cli_validation": "passed",
+  "code_signature": "valid ad-hoc signature; no paid Developer ID or notarization",
+  "native_tests": "97/97 passed",
+  "launch_and_restart_smoke": "passed with sample import, complete analysis, restart, and persisted reopen"
+}

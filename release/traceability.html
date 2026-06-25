@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Requirements Traceability</title><link rel="stylesheet" href="style.css"></head>
+<body><header><a href="index.html">Release evidence</a><h1>Requirements traceability</h1></header><main>
+<p>Each PRD success criterion maps to executable evidence or an explicit release procedure.</p>
+<table><tr><th>#</th><th>Criterion</th><th>Primary evidence</th><th>Status</th></tr>
+<tr><td>1</td><td>Import Chess.com game URL</td><td>URL validation, import, and API tests.</td><td class="pass">PASS</td></tr>
+<tr><td>2</td><td>Reconstruct every legal position</td><td>FEN/SAN/PGN, property, perft, and bitboard parity suites.</td><td class="pass">PASS</td></tr>
+<tr><td>3</td><td>Progressive Stockfish analysis</td><td>Persistent UCI, shallow/deep contract, and WebSocket job tests.</td><td class="pass">PASS</td></tr>
+<tr><td>4</td><td>Top three consequential mistakes</td><td>Candidate bounds, ranking, and Phase 2 end-to-end tests.</td><td class="pass">PASS</td></tr>
+<tr><td>5</td><td>Beginner explanations</td><td>Classifier fixtures, guided lesson evidence, deterministic explanations.</td><td class="pass">PASS</td></tr>
+<tr><td>6</td><td>Interactive drills</td><td>Legal solutions, hints, sessions, retries, scheduling, and corpus validation.</td><td class="pass">PASS</td></tr>
+<tr><td>7</td><td>Append-only binary persistence</td><td>Serialization, checksums, replay, snapshots, migrations, and compaction.</td><td class="pass">PASS</td></tr>
+<tr><td>8</td><td>Interrupted write/engine recovery</td><td>Append fault stages, compaction hooks, crash/timeout restart, shutdown cancellation.</td><td class="pass">PASS</td></tr>
+<tr><td>9</td><td>Recurring weakness/progress</td><td>Profile denominators, recurrence, trends, replay, and statistical gates.</td><td class="pass">PASS</td></tr>
+<tr><td>10</td><td>Relevant resources</td><td>Versioned catalog and evidence-ranking tests.</td><td class="pass">PASS</td></tr>
+<tr><td>11</td><td>Historical background analysis</td><td>Batch recovery, priority reservation, and Phase 3 endurance load.</td><td class="pass">PASS</td></tr>
+<tr><td>12</td><td>Systems-engineering evidence</td><td>Benchmarks, arm64 flamegraph, sanitizers, worker pool, bitboard decision, and a built, signed, CLI-tested package with clean launch, sample analysis, restart, and persisted reopen smoke.</td><td class="pass">PASS</td></tr>
+</table>
+<h2>Phase 3 deliverables</h2><table>
+<tr><td>Prioritized isolated pool</td><td><code>engine/pool.*</code>, dedicated pool tests, diagnostics.</td></tr>
+<tr><td>Advanced drills</td><td>CC0 manifest, matching, two-engine validation, persisted evidence.</td></tr>
+<tr><td>Bitboards</td><td>Shared concept, parity/property/perft, measured production rejection.</td></tr>
+<tr><td>Optimization</td><td>Bounded cache/queues, diagnostics, benchmark-backed no-mmap decision.</td></tr>
+<tr><td>Fault/endurance</td><td>Append/compaction hooks, worker crash, timeout, cancellation, load tests.</td></tr>
+<tr><td>macOS package</td><td>Bundle built, signed, archived, CLI-tested, backup/restore-tested, and live launch/restart smoke-tested with a persisted sample analysis.</td></tr>
+<tr><td>Demo video</td><td>Dataset, script, and walkthrough implemented; recording pending local-server approval.</td></tr>
+</table></main></body></html>

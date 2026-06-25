@@ -11,6 +11,8 @@
 
 namespace pct::engine {
 
+enum class AnalysisPriority { Interactive, CurrentGame, Historical };
+
 struct PrincipalVariation {
     int multipv{1};
     int depth{0};
@@ -27,6 +29,7 @@ struct AnalysisRequest {
     std::chrono::milliseconds move_time{0};
     int multipv{1};
     std::chrono::milliseconds timeout{30000};
+    AnalysisPriority priority{AnalysisPriority::CurrentGame};
 };
 
 struct AnalysisResult {

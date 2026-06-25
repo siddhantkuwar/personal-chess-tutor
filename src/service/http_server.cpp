@@ -343,10 +343,25 @@ Response Api::handle(const Request& request) {
         if (request.method == "GET" && parts == std::vector<std::string>{"api", "health"}) {
             return json_response(200, json::Value::Object{
                                           {"status", "ok"},
-                                          {"version", "0.1.0"},
+                                          {"version", "0.3.0"},
                                           {"local_only", true},
                                           {"games", repository_.size()},
                                       });
+        }
+        if (request.method == "GET" &&
+            parts == std::vector<std::string>{"api", "diagnostics"}) {
+            json::Value result = diagnostics_ ? diagnostics_() : json::Value::Object{};
+            result.as_object().insert_or_assign("job_workers", jobs_.worker_count());
+            result.as_object().insert_or_assign("jobs_queued", jobs_.queued_count());
+            result.as_object().insert_or_assign("job_queue_capacity", jobs_.queue_capacity());
+            result.as_object().insert_or_assign("analysis_cache_hits", jobs_.cache_hits());
+            result.as_object().insert_or_assign("analysis_cache_misses", jobs_.cache_misses());
+            result.as_object().insert_or_assign("analysis_cache_evictions",
+                                                jobs_.cache_evictions());
+            result.as_object().insert_or_assign("analysis_cache_entries", jobs_.cache_size());
+            result.as_object().insert_or_assign("analysis_cache_capacity",
+                                                jobs_.cache_capacity());
+            return json_response(200, std::move(result));
         }
         if (parts == std::vector<std::string>{"api", "games"} && request.method == "GET") {
             json::Value::Array games;
@@ -372,6 +387,8 @@ Response Api::handle(const Request& request) {
                                           {"shallow_depth", 10},
                                           {"deep_depth", 18},
                                           {"top_mistakes", 3},
+                                          {"job_workers", jobs_.worker_count()},
+                                          {"job_queue_capacity", jobs_.queue_capacity()},
                                           {"storage", "append_only_event_log"},
                                       });
         }
@@ -385,6 +402,20 @@ Response Api::handle(const Request& request) {
             for (const auto& drill : drills)
                 values.push_back(training::to_json(drill, current, frequency[drill.category]));
             return json_response(200, json::Value::Object{{"drills", std::move(values)}});
+        }
+        if (parts == std::vector<std::string>{"api", "drills", "supplemental"} &&
+            request.method == "POST") {
+            if (!advanced_drills_)
+                throw Error(ErrorCode::Unsupported, "optional tactical corpus is disabled");
+            json::Value::Array generated;
+            std::size_t added = 0;
+            for (auto drill : advanced_drills_()) {
+                if (repository_.add_validated_drill(drill))
+                    ++added;
+                generated.push_back(training::to_json(drill, now_ms()));
+            }
+            return json_response(200, json::Value::Object{{"added", added},
+                                                           {"drills", std::move(generated)}});
         }
         if (parts.size() >= 3 && parts[0] == "api" && parts[1] == "drills") {
             const auto drill = repository_.drill(parts[2]);

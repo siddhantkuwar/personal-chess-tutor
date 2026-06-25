@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+CONTENTS=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+RESOURCES="$CONTENTS/Resources"
+DATA_DIR="${PCT_DATA_DIR:-$HOME/Library/Application Support/Personal Chess Tutor}"
+PORT="${PCT_PORT:-8787}"
+
+find_stockfish() {
+  if [ -n "${PCT_STOCKFISH:-}" ] && [ -x "$PCT_STOCKFISH" ]; then
+    printf '%s\n' "$PCT_STOCKFISH"
+    return
+  fi
+  if command -v stockfish >/dev/null 2>&1; then
+    command -v stockfish
+    return
+  fi
+  for candidate in /opt/homebrew/bin/stockfish /usr/local/bin/stockfish; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  printf '%s\n' "Stockfish was not found. Install it with 'brew install stockfish' or set PCT_STOCKFISH." >&2
+  exit 1
+}
+
+STOCKFISH=$(find_stockfish)
+mkdir -p "$DATA_DIR"
+(sleep 1; open "http://127.0.0.1:$PORT") &
+exec "$RESOURCES/bin/personal-chess-tutor" \
+  --data-dir "$DATA_DIR" \
+  --web-root "$RESOURCES/web" \
+  --tactical-corpus "$RESOURCES/tactical-corpus.json" \
+  --stockfish "$STOCKFISH" \
+  --port "$PORT" "$@"

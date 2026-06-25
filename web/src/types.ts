@@ -112,6 +112,10 @@ export interface Drill {
   changed_threat: string;
   attacked_pieces: string[];
   opponent_response: string;
+  source_type: "personal_game" | "public_corpus";
+  provenance: string;
+  corpus_version: string;
+  validation_evidence: string[];
   schedule: {
     state: "new" | "due" | "upcoming" | "mastered";
     next_review_ms: number;

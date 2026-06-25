@@ -13,6 +13,7 @@ namespace pct::storage {
 
 inline constexpr std::uint16_t current_schema_version = 2;
 enum class CompactionStage { TemporaryWritten, Validated, BeforeReplace, Replaced };
+enum class AppendStage { BeforeWrite, AfterPartialWrite, BeforeSync, AfterSync };
 
 enum class EventType : std::uint16_t {
     GameImported = 1,
@@ -71,6 +72,7 @@ class EventLog {
     [[nodiscard]] const std::filesystem::path& path() const {
         return path_;
     }
+    void set_append_fault_hook(std::function<void(AppendStage)> hook);
 
     [[nodiscard]] static std::vector<std::byte> serialize(const Event& event);
     [[nodiscard]] static std::uint32_t checksum(const std::byte* data, std::size_t size);
@@ -79,6 +81,7 @@ class EventLog {
     std::filesystem::path path_;
     mutable std::mutex mutex_;
     std::uint64_t next_id_{1};
+    std::function<void(AppendStage)> append_fault_hook_;
 
     [[nodiscard]] ReplayResult replay_unlocked() const;
 };

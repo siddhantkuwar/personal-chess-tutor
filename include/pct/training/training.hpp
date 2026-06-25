@@ -2,9 +2,13 @@
 
 #include "pct/analysis/analyzer.hpp"
 #include "pct/common/json.hpp"
+#include "pct/engine/stockfish.hpp"
 
 #include <cstdint>
 #include <map>
+#include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +53,56 @@ struct Drill {
     std::string changed_threat;
     std::vector<std::string> attacked_pieces;
     std::string opponent_response;
+    std::string source_type{"personal_game"};
+    std::string provenance;
+    std::string corpus_version;
+    std::vector<std::string> validation_evidence;
+};
+
+struct TacticalCorpusManifest {
+    std::string id;
+    std::string version;
+    std::string source_url;
+    std::string download_url;
+    std::string license;
+};
+
+struct TacticalPuzzle {
+    std::string id;
+    std::string fen;
+    std::string solution;
+    std::vector<std::string> motifs;
+    int rating{0};
+};
+
+struct Profile;
+
+class TacticalCorpus {
+  public:
+    [[nodiscard]] static TacticalCorpus load(const std::filesystem::path& path);
+    [[nodiscard]] const TacticalCorpusManifest& manifest() const noexcept { return manifest_; }
+    [[nodiscard]] const std::vector<TacticalPuzzle>& puzzles() const noexcept { return puzzles_; }
+    [[nodiscard]] std::vector<TacticalPuzzle> match(const Profile& profile,
+                                                    std::size_t limit) const;
+
+  private:
+    TacticalCorpusManifest manifest_;
+    std::vector<TacticalPuzzle> puzzles_;
+};
+
+using ValidationEngineFactory = std::function<std::unique_ptr<engine::AnalysisEngine>()>;
+
+class AdvancedDrillGenerator {
+  public:
+    AdvancedDrillGenerator(TacticalCorpus corpus, ValidationEngineFactory verifier_factory);
+
+    [[nodiscard]] std::vector<Drill> generate(const Profile& profile,
+                                              const std::vector<Drill>& personal_drills,
+                                              std::size_t limit = 5) const;
+
+  private:
+    TacticalCorpus corpus_;
+    ValidationEngineFactory verifier_factory_;
 };
 
 struct Schedule {

@@ -94,6 +94,7 @@ class Board {
     [[nodiscard]] std::uint64_t hash() const {
         return hash_;
     }
+    [[nodiscard]] bool hash_is_consistent() const { return hash_ == compute_hash(); }
     [[nodiscard]] std::size_t repetition_count() const;
     [[nodiscard]] bool is_threefold_repetition() const {
         return repetition_count() >= 3;

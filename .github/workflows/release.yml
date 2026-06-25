@@ -1,0 +1,25 @@
+name: Release qualification
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  macos-package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: lukka/get-cmake@latest
+      - run: chmod +x packaging/macos/package.sh packaging/macos/launcher packaging/macos/pct-data scripts/clean-install-smoke.sh
+      - run: scripts/clean-install-smoke.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Personal-Chess-Tutor-macOS
+          path: dist/Personal-Chess-Tutor-macOS.zip
+          if-no-files-found: error

@@ -1,0 +1,27 @@
+{
+  "captured_at": "2026-06-20T18:41:00-07:00",
+  "environment": {"architecture":"arm64","host":"Apple Silicon MacBook Pro","compiler":"AppleClang 21.0.0","build":"RelWithDebInfo"},
+  "schema": "pct-benchmark-1",
+  "peak_rss_kb": 5896,
+  "results": [
+    {"name":"fen_parse","ns_per_operation":957.9375},
+    {"name":"pgn_parse","ns_per_operation":430468.7915},
+    {"name":"fen_parse_allocations","allocations_per_operation":7},
+    {"name":"pgn_parse_allocations","allocations_per_operation":1071},
+    {"name":"legal_move_generation","ns_per_operation":2784.0042},
+    {"name":"array_make_unmake","ns_per_operation":61.0396},
+    {"name":"bitboard_make_unmake","ns_per_operation":246.63955},
+    {"name":"array_square_lookup","ns_per_operation":1.003083},
+    {"name":"bitboard_square_lookup","ns_per_operation":9.32675},
+    {"name":"zobrist_hash_validation","ns_per_operation":48.324585},
+    {"name":"perft_depth_4","ns_per_operation":45644792},
+    {"name":"event_serialize_512_bytes","ns_per_operation":4104.87085},
+    {"name":"cache_hit","ns_per_operation":1023.905415},
+    {"name":"event_replay_100_records","ns_per_operation":431467.08},
+    {"name":"snapshot_repository_load_10_games","ns_per_operation":1560804.15},
+    {"name":"derived_index_rebuild_10_games","ns_per_operation":1484041},
+    {"name":"synthetic_engine_pool_1","requests_per_second":78.597,"maximum_queue_latency_ms":188},
+    {"name":"synthetic_engine_pool_2","requests_per_second":152.416,"maximum_queue_latency_ms":89},
+    {"name":"synthetic_engine_pool_4","requests_per_second":331.833,"maximum_queue_latency_ms":36}
+  ]
+}

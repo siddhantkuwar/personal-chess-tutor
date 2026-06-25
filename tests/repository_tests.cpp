@@ -110,3 +110,36 @@ TEST_CASE("repository rebuilds deleted and corrupted derived indexes from the ev
     CHECK(snapshots.front().at("valid").as_bool());
     remove_repository_files(path);
 }
+
+TEST_CASE("repository ignores interrupted and corrupted snapshots without losing events") {
+    const auto path = repository_path();
+    remove_repository_files(path);
+    const chess::Game parsed = chess::parse_pgn(pgn);
+    const import::ImportedGame imported{
+        parsed, {}, std::string(pgn), import::ImportMethod::ManualPgn};
+    {
+        storage::EventLog log(path);
+        app::Repository repository(log);
+        CHECK(repository.add(imported) == app::AddResult::Added);
+    }
+    const auto snapshots = path.parent_path() / "snapshots";
+    std::filesystem::create_directories(snapshots);
+    {
+        std::ofstream partial(snapshots / "projection-999.json.tmp");
+        partial << "{\"games\":[";
+    }
+    {
+        std::ofstream corrupt(snapshots / "projection-998.json");
+        corrupt << "not a snapshot";
+    }
+    {
+        storage::EventLog log(path);
+        app::Repository repository(log);
+        CHECK_EQ(repository.size(), 1ULL);
+        CHECK(repository.get(parsed.identity).has_value());
+    }
+    const auto indexed = read_json(path.parent_path() / "snapshots.idx").at("snapshots").as_array();
+    CHECK_EQ(indexed.size(), 1ULL);
+    CHECK(!indexed.front().at("valid").as_bool());
+    remove_repository_files(path);
+}

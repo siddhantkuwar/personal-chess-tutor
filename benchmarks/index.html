@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reproducible Benchmarks - Personal Chess Tutor</title></head>
+<body><main><h1>Reproducible performance baselines</h1><p>The benchmark executable uses deterministic synthetic PGN and standard chess positions. Dataset profiles represent 10, 100, and 1,000 games without including private history.</p>
+<h2>Run</h2><pre>cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target pct-benchmarks
+./build/pct-benchmarks &gt; benchmark-results.json</pre>
+<h2>Coverage</h2><p>FEN and PGN parsing, legal moves, make/unmake, perft, square lookup, event serialization/replay, cache hits, and array-versus-bitboard costs are measured in one machine-readable run.</p>
+<h2>Interpretation</h2><p>Use <code>targets.json</code> for product latency and memory gates. The candidate bitboard currently keeps the array board as its correctness oracle; production adoption requires a measured end-to-end gain, not a faster isolated lookup.</p></main></body></html>

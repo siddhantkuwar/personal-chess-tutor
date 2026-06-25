@@ -81,6 +81,18 @@ TEST_CASE("hash is stable after unmake") {
     CHECK_EQ(board.hash(), initial_hash);
 }
 
+TEST_CASE("incremental Zobrist hash matches full recomputation") {
+    Board board = Board::initial();
+    CHECK(board.hash_is_consistent());
+    for (int ply = 0; ply < 32; ++ply) {
+        const auto moves = board.legal_moves();
+        if (moves.empty())
+            break;
+        static_cast<void>(board.make_move(moves[static_cast<std::size_t>(ply) % moves.size()]));
+        CHECK(board.hash_is_consistent());
+    }
+}
+
 TEST_CASE("repetition history detects threefold positions") {
     Board board = Board::initial();
     for (int cycle = 0; cycle < 2; ++cycle) {

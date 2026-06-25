@@ -10,7 +10,8 @@ profiles, and persistence all live in the C++ service.
 
 ## Current Scope
 
-Phase 1 and Phase 2 are implemented:
+Phases 1 through 3 are implemented and backed by executable tests, release evidence, profiling,
+security checks, and a clean macOS package smoke:
 
 - Legal FEN, SAN, and PGN handling with make/unmake, repetition, hashing, and perft tests.
 - Chess.com URL and manual PGN import with bounded input and response sizes.
@@ -23,6 +24,12 @@ Phase 1 and Phase 2 are implemented:
 - Batch import, shallow-first background scheduling, pause/resume, and restart recovery.
 - Append-only checksummed event storage, replay, snapshots, disposable indexes, and compaction.
 - Responsive TypeScript interface served by the loopback-only C++ HTTP/WebSocket server.
+- Configurable isolated Stockfish worker pool with interactive/current/history priorities.
+- Bounded game and engine queues, retry limits, deduplication, and reserved interactive capacity.
+- Optional CC0 tactical corpus with provenance, rating/motif matching, and two-engine validation.
+- Array/bitboard parity model and benchmark-backed production representation decision.
+- Reproducible benchmarks, Instruments profiling, sanitizer/race workflows, and diagnostics API.
+- Reproducible macOS app bundle, local backup/restore utility, and clean-install qualification.
 
 ## Architecture
 
@@ -37,7 +44,7 @@ C++ local service (127.0.0.1:8787)
     |-- repository               current in-memory projections
     `-- event log                durable source of truth
              |
-             `-- Stockfish child process over UCI pipes
+             `-- isolated Stockfish child processes over UCI pipes
 ```
 
 Module ownership:
@@ -57,6 +64,11 @@ Module ownership:
 Cancellation uses the small shared-atomic abstraction in
 `include/pct/common/cancellation.hpp`. This preserves cooperative cancellation without relying
 on C++20 stop-token APIs that are unavailable in some Apple libc++ versions used by CI.
+
+Phase 3 architecture, protocols, measurements, decisions, security evidence, and requirements
+traceability are indexed in [`release/index.html`](release/index.html).
+Optional full-corpus download and bounded conversion instructions are in
+[`release/corpus.html`](release/corpus.html).
 
 ## Requirements
 
@@ -99,7 +111,15 @@ Useful server options:
 --web-root path    built frontend directory (default: web/dist)
 --stockfish path   Stockfish executable (default: stockfish)
 --port number      loopback HTTP port (default: 8787)
+--workers count    isolated Stockfish and game workers (default: 2, maximum: 16)
+--max-pending n    bounded job and engine admission limit (default: 256)
+--retry-limit n    retries after an isolated engine failure (default: 1)
+--tactical-corpus  optional provenance-tracked local corpus manifest
+--no-tactical-corpus  disable supplemental public puzzles
 ```
+
+Runtime queue and cache counters are available locally at
+`http://127.0.0.1:8787/api/diagnostics`.
 
 ## CLI
 
@@ -114,8 +134,51 @@ Useful server options:
 
 Native CI builds and runs the C++ test executable on macOS. Frontend CI type-checks and builds
 the Vite application on Node.js 20. The native suite covers chess rules, PGN/import behavior,
-Stockfish recovery, analysis, storage faults, jobs, API contracts, training, and the Phase 2
-end-to-end workflow.
+Stockfish recovery, analysis, storage faults, jobs, API contracts, training, the Phase 2
+end-to-end workflow, and Phase 3 pool, corpus, representation-parity, and endurance behavior.
+
+Additional qualification commands:
+
+```sh
+./build/pct-benchmarks
+scripts/security-check.sh
+scripts/race-check.sh
+scripts/profile-benchmarks.sh
+scripts/clean-install-smoke.sh
+```
+
+The first four checks have been run successfully on the current arm64 build. The clean-install
+script has also been run successfully: it packages the app, launches it on loopback with an
+isolated data directory, imports and analyzes the demo PGN, restarts, and reopens the persisted
+game.
+
+## macOS Package
+
+```sh
+packaging/macos/package.sh
+```
+
+This produces `dist/Personal-Chess-Tutor-macOS.zip`. The app includes the backend, CLI,
+frontend, catalogs, tactical-corpus manifest, and `pct-data` backup/restore utility. Stockfish
+remains an explicit free local dependency: install it with `brew install stockfish` or set
+`PCT_STOCKFISH`.
+
+Application data defaults to `~/Library/Application Support/Personal Chess Tutor`. The packaged
+`Contents/Resources/bin/pct-data` command prints the location and supports backup, non-destructive
+restore, confirmed reset, and uninstall guidance.
+
+## Troubleshooting
+
+- **Stockfish not found:** install it or pass `--stockfish /absolute/path/to/stockfish`.
+- **macOS blocks the downloaded app:** the free release is ad-hoc signed rather than notarized;
+  right-click the app, choose Open, and confirm the one-time local exception.
+- **Frontend build missing:** run `npm ci --prefix web && npm run build --prefix web`.
+- **Port already used:** pass `--port` with another loopback port.
+- **Analysis appears paused:** `POST /api/jobs/resume` or use the queue control in Train.
+- **Storage warning after interruption:** preserve the data directory, then inspect
+  `/api/diagnostics`; incomplete trailing records recover automatically at startup.
+- **Supplemental puzzles are empty:** they require a recurring weakness and two stable independent
+  Stockfish validations. Personal-game drills remain preferred.
 
 ## Privacy
 

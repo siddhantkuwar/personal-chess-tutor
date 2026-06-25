@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Benchmark Report</title><link rel="stylesheet" href="style.css"></head><body><header><a href="index.html">Release evidence</a><h1>Benchmark report</h1></header><main>
+<p class="lede">Measured June 20, 2026 on Apple Silicon arm64, RelWithDebInfo, AppleClang 21. Reproduce with <code>./build-profile/pct-benchmarks</code>; cross-machine tolerance is 20%.</p>
+<table><tr><th>Operation</th><th>Measured</th></tr>
+<tr><td>FEN parse</td><td>0.96 µs/op; 7 allocations</td></tr><tr><td>PGN parse (10 plies)</td><td>430 µs/op; 1,071 allocations</td></tr>
+<tr><td>Legal move generation</td><td>2.78 µs/op</td></tr><tr><td>Initial perft depth 4</td><td>45.6 ms; exact node count preserved</td></tr>
+<tr><td>Full Zobrist hash validation</td><td>48.4 ns/op</td></tr><tr><td>Event serialization, 512 B</td><td>4.10 µs/op</td></tr>
+<tr><td>Replay, 100 records</td><td>418 µs/op</td></tr><tr><td>Snapshot repository load, 10 games</td><td>1.55 ms/op</td></tr>
+<tr><td>Derived index rebuild, 10 games</td><td>1.54 ms</td></tr><tr><td>Cache hit</td><td>1.02 µs/op</td></tr>
+<tr><td>Synthetic pool 1 / 2 / 4</td><td>79 / 152 / 332 requests/s</td></tr><tr><td>Peak benchmark RSS</td><td>5.8 MiB observed</td></tr></table>
+<h2>Board comparison</h2><table><tr><th>Path</th><th>Array</th><th>Bitboard candidate</th></tr><tr><td>Make/unmake with hash maintenance</td><td>61.0 ns</td><td>247 ns</td></tr><tr><td>Square lookup</td><td>1.00 ns</td><td>9.33 ns</td></tr></table>
+<h2>Conclusions</h2><ul><li>Two workers provide about 1.94× isolated one-worker throughput and remain the conservative default.</li><li>The candidate bitboard is substantially slower on both measured production operations, so the array board remains production.</li><li>PGN parsing allocates heavily but remains below one millisecond for the fixture; optimization is deferred until an import workload crosses a product latency gate.</li><li>Snapshot load, replay, and cache measurements do not justify mmap or zero-copy complexity.</li><li>The Phase 3 load test separately enforces interactive completion while historical work remains active.</li></ul>
+<p>Machine-readable values: <a href="benchmarks/m2pro-arm64.json">m2pro-arm64.json</a>.</p></main></body></html>

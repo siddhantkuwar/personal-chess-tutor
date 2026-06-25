@@ -1,6 +1,7 @@
 #include "test.hpp"
 
 #include "pct/storage/event_log.hpp"
+#include "pct/common/error.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -147,4 +148,54 @@ TEST_CASE("compaction drops shallow projections superseded by completed analysis
     CHECK_EQ(replay.events.size(), 2ULL);
     CHECK(replay.events.front().type == EventType::AnalysisCompleted);
     CHECK(replay.events.back().type == EventType::LogCompacted);
+}
+
+TEST_CASE("append fault injection preserves acknowledged records and recovers partial tails") {
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("pct-append-fault-" + std::to_string(::getpid()) + ".log");
+    for (const auto stage : {AppendStage::BeforeWrite, AppendStage::AfterPartialWrite,
+                             AppendStage::BeforeSync}) {
+        std::filesystem::remove(path);
+        {
+            EventLog log(path);
+            static_cast<void>(log.append(EventType::GameImported, "acknowledged"));
+            log.set_append_fault_hook([&](AppendStage current) {
+                if (current == stage)
+                    throw pct::Error(pct::ErrorCode::IoError, "injected append interruption");
+            });
+            CHECK_THROWS(log.append(EventType::GameParsed, "interrupted"));
+        }
+        EventLog replayed(path);
+        const auto before_recovery = replayed.replay();
+        CHECK_EQ(before_recovery.events.front().payload, "acknowledged");
+        const std::size_t expected_events = stage == AppendStage::BeforeSync ? 2 : 1;
+        CHECK_EQ(before_recovery.events.size(), expected_events);
+        if (stage == AppendStage::AfterPartialWrite)
+            CHECK(replayed.recover_trailing_record());
+        const auto recovered = replayed.replay();
+        CHECK_EQ(recovered.events.size(), expected_events);
+        CHECK(!recovered.truncated_tail);
+    }
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("append interrupted after sync remains a valid durable event") {
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("pct-after-sync-" + std::to_string(::getpid()) + ".log");
+    std::filesystem::remove(path);
+    {
+        EventLog log(path);
+        log.set_append_fault_hook([](AppendStage stage) {
+            if (stage == AppendStage::AfterSync)
+                throw pct::Error(pct::ErrorCode::IoError, "injected process exit after sync");
+        });
+        CHECK_THROWS(log.append(EventType::GameImported, "durable"));
+    }
+    EventLog replayed(path);
+    const auto result = replayed.replay();
+    CHECK_EQ(result.events.size(), 1ULL);
+    CHECK_EQ(result.events.front().payload, "durable");
+    CHECK(result.corruptions.empty());
+    CHECK(!result.truncated_tail);
+    std::filesystem::remove(path);
 }

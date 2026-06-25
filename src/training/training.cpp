@@ -273,6 +273,9 @@ json::Value to_json(const Drill& drill, std::int64_t now_ms, std::size_t categor
     json::Value::Array solutions;
     for (const auto& solution : drill.solutions)
         solutions.emplace_back(solution);
+    json::Value::Array validation_evidence;
+    for (const auto& evidence : drill.validation_evidence)
+        validation_evidence.emplace_back(evidence);
     const Schedule scheduled = schedule(drill, now_ms, category_frequency);
     return json::Value::Object{
         {"id", drill.id}, {"source_game_id", drill.source_game_id}, {"source_ply", drill.source_ply},
@@ -295,6 +298,10 @@ json::Value to_json(const Drill& drill, std::int64_t now_ms, std::size_t categor
              return json::Value(std::move(pieces));
          }()},
         {"opponent_response", drill.opponent_response},
+        {"source_type", drill.source_type},
+        {"provenance", drill.provenance},
+        {"corpus_version", drill.corpus_version},
+        {"validation_evidence", std::move(validation_evidence)},
         {"scheduler_version", std::string(scheduler_version)},
         {"schedule", json::Value::Object{{"state", std::string(name(scheduled.state))},
                                            {"last_review_ms", static_cast<double>(scheduled.last_review_ms)},

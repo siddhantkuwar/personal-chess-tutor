@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -29,8 +30,13 @@ struct Response {
 
 class Api {
   public:
-    Api(import::ImportService& importer, app::Repository& repository, app::JobManager& jobs)
-        : importer_(importer), repository_(repository), jobs_(jobs) {}
+    using Diagnostics = std::function<json::Value()>;
+    using AdvancedDrills = std::function<std::vector<training::Drill>()>;
+
+    Api(import::ImportService& importer, app::Repository& repository, app::JobManager& jobs,
+        Diagnostics diagnostics = {}, AdvancedDrills advanced_drills = {})
+        : importer_(importer), repository_(repository), jobs_(jobs),
+          diagnostics_(std::move(diagnostics)), advanced_drills_(std::move(advanced_drills)) {}
 
     [[nodiscard]] Response handle(const Request& request);
 
@@ -38,6 +44,8 @@ class Api {
     import::ImportService& importer_;
     app::Repository& repository_;
     app::JobManager& jobs_;
+    Diagnostics diagnostics_;
+    AdvancedDrills advanced_drills_;
 };
 
 struct ServerOptions {

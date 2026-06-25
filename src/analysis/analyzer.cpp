@@ -434,8 +434,10 @@ bool AnalysisCache::get(const engine::AnalysisRequest& request,
                         engine::AnalysisResult& result) const {
     std::lock_guard lock(mutex_);
     const auto found = values_.find(key(request));
-    if (found == values_.end())
+    if (found == values_.end()) {
+        ++misses_;
         return false;
+    }
     ++hits_;
     result = found->second;
     return true;
@@ -443,7 +445,18 @@ bool AnalysisCache::get(const engine::AnalysisRequest& request,
 
 void AnalysisCache::put(const engine::AnalysisRequest& request, engine::AnalysisResult result) {
     std::lock_guard lock(mutex_);
-    values_.insert_or_assign(key(request), std::move(result));
+    const std::string cache_key = key(request);
+    if (!values_.contains(cache_key)) {
+        if (max_entries_ == 0)
+            return;
+        while (values_.size() >= max_entries_) {
+            values_.erase(insertion_order_.front());
+            insertion_order_.pop_front();
+            ++evictions_;
+        }
+        insertion_order_.push_back(cache_key);
+    }
+    values_.insert_or_assign(cache_key, std::move(result));
 }
 
 std::size_t AnalysisCache::size() const {
@@ -454,6 +467,16 @@ std::size_t AnalysisCache::size() const {
 std::size_t AnalysisCache::hit_count() const {
     std::lock_guard lock(mutex_);
     return hits_;
+}
+
+std::size_t AnalysisCache::miss_count() const {
+    std::lock_guard lock(mutex_);
+    return misses_;
+}
+
+std::size_t AnalysisCache::eviction_count() const {
+    std::lock_guard lock(mutex_);
+    return evictions_;
 }
 
 Analyzer::Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, AnalyzerOptions options)
@@ -514,7 +537,8 @@ GamePhase Analyzer::classify_phase(const chess::Board& board, std::size_t ply) {
 }
 
 GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback progress,
-                                       CancellationToken stop_token) {
+                                       CancellationToken stop_token,
+                                       engine::AnalysisPriority priority) {
     if (game.plies.empty())
         throw Error(ErrorCode::InvalidArgument, "cannot analyze an empty game");
     const auto report = [&](AnalysisStage stage, std::size_t complete, std::size_t total,
@@ -543,6 +567,8 @@ GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback
                                                std::chrono::milliseconds(0), 2};
         engine::AnalysisRequest after_request{game.plies[index].fen_after, options_.shallow_depth,
                                               std::chrono::milliseconds(0), 2};
+        before_request.priority = priority;
+        after_request.priority = priority;
         before_results[index] = analyze_cached(before_request, stop_token);
         after_results[index] = analyze_cached(after_request, stop_token);
         chess::Board before = chess::Board::from_fen(game.plies[index].fen_before);
@@ -575,7 +601,8 @@ GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback
 }
 
 GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analysis,
-                                    ProgressCallback progress, CancellationToken stop_token) {
+                                    ProgressCallback progress, CancellationToken stop_token,
+                                    engine::AnalysisPriority priority) {
     if (analysis.game_id != game.identity || analysis.moves.size() != game.plies.size())
         throw Error(ErrorCode::InvalidArgument,
                     "shallow analysis does not match the requested game");
@@ -604,10 +631,12 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
         const std::size_t index = candidates[candidate_index];
         engine::AnalysisRequest request{game.plies[index].fen_before, options_.deep_depth,
                                         std::chrono::milliseconds(0), 3};
+        request.priority = priority;
         engine::AnalysisResult deep = analyze_cached(request, stop_token);
         engine::AnalysisRequest after_request{game.plies[index].fen_after,
                                               options_.shallow_depth,
                                               std::chrono::milliseconds(0), 2};
+        after_request.priority = priority;
         const engine::AnalysisResult after_result =
             analyze_cached(after_request, stop_token);
         const std::string category = classify_mistake_category(game, index, deep, after_result);
@@ -668,9 +697,10 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
 }
 
 GameAnalysis Analyzer::analyze(const chess::Game& game, ProgressCallback progress,
-                               CancellationToken stop_token) {
-    GameAnalysis shallow = analyze_shallow(game, progress, stop_token);
-    return analyze_deep(game, std::move(shallow), progress, stop_token);
+                               CancellationToken stop_token,
+                               engine::AnalysisPriority priority) {
+    GameAnalysis shallow = analyze_shallow(game, progress, stop_token, priority);
+    return analyze_deep(game, std::move(shallow), progress, stop_token, priority);
 }
 
 std::string_view name(AnalysisStage stage) {

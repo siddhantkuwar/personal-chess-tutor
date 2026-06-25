@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -100,17 +101,25 @@ using ProgressCallback = std::function<void(const Progress&)>;
 
 class AnalysisCache {
   public:
+    explicit AnalysisCache(std::size_t max_entries = 50000) : max_entries_(max_entries) {}
     [[nodiscard]] bool get(const engine::AnalysisRequest& request,
                            engine::AnalysisResult& result) const;
     void put(const engine::AnalysisRequest& request, engine::AnalysisResult result);
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] std::size_t hit_count() const;
+    [[nodiscard]] std::size_t miss_count() const;
+    [[nodiscard]] std::size_t eviction_count() const;
+    [[nodiscard]] std::size_t capacity() const noexcept { return max_entries_; }
 
   private:
     [[nodiscard]] static std::string key(const engine::AnalysisRequest& request);
     mutable std::mutex mutex_;
     std::map<std::string, engine::AnalysisResult> values_;
+    std::deque<std::string> insertion_order_;
+    std::size_t max_entries_{50000};
     mutable std::size_t hits_{0};
+    mutable std::size_t misses_{0};
+    std::size_t evictions_{0};
 };
 
 class Analyzer {
@@ -118,16 +127,26 @@ class Analyzer {
     Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, AnalyzerOptions options = {});
 
     [[nodiscard]] GameAnalysis analyze(const chess::Game& game, ProgressCallback progress = {},
-                                       CancellationToken stop_token = {});
+                                       CancellationToken stop_token = {},
+                                       engine::AnalysisPriority priority =
+                                           engine::AnalysisPriority::CurrentGame);
     [[nodiscard]] GameAnalysis analyze_shallow(const chess::Game& game,
                                                ProgressCallback progress = {},
-                                               CancellationToken stop_token = {});
+                                               CancellationToken stop_token = {},
+                                               engine::AnalysisPriority priority =
+                                                   engine::AnalysisPriority::CurrentGame);
     [[nodiscard]] GameAnalysis analyze_deep(const chess::Game& game,
                                             GameAnalysis shallow_analysis,
                                             ProgressCallback progress = {},
-                                            CancellationToken stop_token = {});
+                                            CancellationToken stop_token = {},
+                                            engine::AnalysisPriority priority =
+                                                engine::AnalysisPriority::CurrentGame);
     [[nodiscard]] static GamePhase classify_phase(const chess::Board& board, std::size_t ply);
     [[nodiscard]] std::size_t cache_hits() const { return cache_.hit_count(); }
+    [[nodiscard]] std::size_t cache_misses() const { return cache_.miss_count(); }
+    [[nodiscard]] std::size_t cache_evictions() const { return cache_.eviction_count(); }
+    [[nodiscard]] std::size_t cache_size() const { return cache_.size(); }
+    [[nodiscard]] std::size_t cache_capacity() const { return cache_.capacity(); }
 
   private:
     engine::AnalysisEngine& engine_;

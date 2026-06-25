@@ -41,6 +41,10 @@ export async function loadDrills(): Promise<Drill[]> {
   return (await request<{ drills: Drill[] }>("/api/drills")).drills;
 }
 
+export function generateSupplementalDrills(): Promise<{ added: number; drills: Drill[] }> {
+  return request("/api/drills/supplemental", { method: "POST", body: "{}" });
+}
+
 export function loadProfile(): Promise<Profile> {
   return request<Profile>("/api/profile");
 }

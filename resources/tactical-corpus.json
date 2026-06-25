@@ -1,0 +1,25 @@
+{
+  "manifest": {
+    "id": "lichess-puzzles-curated",
+    "version": "2026-06-04-sample-1",
+    "source_url": "https://database.lichess.org/#puzzles",
+    "download_url": "https://database.lichess.org/lichess_db_puzzle.csv.zst",
+    "license": "Creative Commons CC0"
+  },
+  "puzzles": [
+    {
+      "id": "00sO1",
+      "fen": "1k1r4/pp3pp1/2p1p3/4b3/P3n1P1/8/KPP2PN1/3rBR1R b - - 2 31",
+      "moves": ["b8c7", "e1a5", "b7b6", "f1d1"],
+      "rating": 998,
+      "motifs": ["Discovered attack", "One-move tactical loss"]
+    },
+    {
+      "id": "00sJ9",
+      "fen": "r3r1k1/p4ppp/2p2n2/1p6/3P1qb1/2NQR3/PPB2PP1/R1B3K1 w - - 5 18",
+      "moves": ["e3g3", "e8e1", "g1h2", "e1c1"],
+      "rating": 2671,
+      "motifs": ["Fork", "Removal of defender"]
+    }
+  ]
+}

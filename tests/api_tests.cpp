@@ -3,6 +3,8 @@
 #include "pct/service/http_server.hpp"
 
 #include <filesystem>
+#include <utility>
+#include <vector>
 #include <unistd.h>
 
 using namespace pct;
@@ -32,9 +34,11 @@ struct ApiFixture {
     app::JobManager jobs;
     service::Api api;
 
-    ApiFixture()
+    ApiFixture(service::Api::Diagnostics diagnostics = {},
+               service::Api::AdvancedDrills advanced_drills = {})
         : log((std::filesystem::remove(path), path)), repository(log), analyzer(engine, cache),
-          jobs(repository, analyzer), api(importer, repository, jobs) {}
+          jobs(repository, analyzer),
+          api(importer, repository, jobs, std::move(diagnostics), std::move(advanced_drills)) {}
     ~ApiFixture() = default;
 };
 
@@ -81,6 +85,41 @@ TEST_CASE("API exposes settings mistakes and analysis contracts") {
     const auto mistakes = fixture.api.handle(service::Request{"GET", "/api/mistakes", {}, {}});
     CHECK_EQ(mistakes.status, 200);
     CHECK(json::parse(mistakes.body).at("mistakes").as_array().empty());
+}
+
+TEST_CASE("API exposes bounded diagnostics and persists supplemental drills") {
+    ApiFixture fixture(
+        [] { return json::Value::Object{{"engine_workers", 2}}; },
+        [] {
+            training::Drill drill;
+            drill.id = "corpus:test";
+            drill.source_game_id = "corpus:test";
+            drill.fen = chess::Board::initial().to_fen();
+            drill.category = "Fork";
+            drill.phase = "opening";
+            drill.explanation = "Validated test puzzle";
+            drill.solutions = {"a2a3"};
+            drill.source_type = "public_corpus";
+            drill.provenance = "https://database.lichess.org/#puzzles | CC0";
+            drill.corpus_version = "test-1";
+            drill.validation_evidence = {"legal", "verifier A", "verifier B"};
+            return std::vector<training::Drill>{drill};
+        });
+    const auto diagnostics =
+        fixture.api.handle(service::Request{"GET", "/api/diagnostics", {}, {}});
+    CHECK_EQ(diagnostics.status, 200);
+    const auto diagnostic_body = json::parse(diagnostics.body);
+    CHECK_EQ(diagnostic_body.at("engine_workers").as_size(), 2ULL);
+    CHECK_EQ(diagnostic_body.at("job_queue_capacity").as_size(), 256ULL);
+    CHECK(diagnostic_body.as_object().contains("analysis_cache_evictions"));
+
+    const auto generated = fixture.api.handle(
+        service::Request{"POST", "/api/drills/supplemental", {}, "{}"});
+    CHECK_EQ(generated.status, 200);
+    CHECK_EQ(json::parse(generated.body).at("added").as_size(), 1ULL);
+    const auto stored = fixture.repository.drill("corpus:test");
+    CHECK(stored.has_value());
+    CHECK_EQ(stored->source_type, "public_corpus");
 }
 
 TEST_CASE("API exposes phase two profile drills resources and batch contracts") {
