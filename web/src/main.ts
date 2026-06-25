@@ -184,11 +184,14 @@ function progressPercent(): number {
 
 function gameSummaryMarkup(): string {
   const tags = state.game?.game.tags ?? {};
+  const white = tags.White ?? "No game imported";
+  const black = tags.Black ?? "";
   const result = tags.Result ?? "";
+  const serviceOffline = state.error === "Local API service is not running.";
   return `<section class="game-summary">
-    <div class="players"><h2>${escapeHtml(tags.White ?? "No game imported")}<span> vs. </span>${escapeHtml(tags.Black ?? "")}</h2>${result ? `<strong>${escapeHtml(result)}</strong>` : ""}</div>
+    <div class="players"><h2>${escapeHtml(white)}${black ? `<span> vs. </span>${escapeHtml(black)}` : ""}</h2>${result ? `<strong>${escapeHtml(result)}</strong>` : ""}</div>
     ${statusMarkup()}
-    ${state.error ? `<p class="inline-error" role="alert">${escapeHtml(state.error)}</p>` : ""}
+    ${state.error && !serviceOffline ? `<p class="inline-error" role="alert">${escapeHtml(state.error)}</p>` : ""}
   </section>`;
 }
 
@@ -293,6 +296,7 @@ function render(): void {
     bindTrainingEvents();
     return;
   }
+  const serviceOffline = state.error === "Local API service is not running.";
   app.innerHTML = `<div class="app-shell">
     <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game" class="active">${icons.book}<span>Study</span></button><button data-mode="training">${icons.chevron}<span>Train</span></button><button data-mode="progress">${icons.chart}<span>Progress</span></button></nav><button class="menu-button" aria-label="Menu">${icons.menu}</button></header>
     <button class="import-bar" id="open-import">${icons.upload}<strong>${state.busy ? "Importing…" : "Import game"}</strong><span>Drag &amp; drop a .pgn file or paste PGN</span>${icons.chevron}</button>
@@ -302,7 +306,7 @@ function render(): void {
       <aside class="analysis-region">${moveListMarkup()}${evaluationMarkup()}</aside>
       <div class="review-region">${reviewMarkup()}</div>
     </main>
-    <footer class="local-status"><span>All analysis is performed locally on your device.</span><span>Your games and analysis stay on this computer.</span><span class="engine-state"><i></i>${state.job?.status === "failed" ? "Engine unavailable" : "Local service ready"}</span></footer>
+    <footer class="local-status"><span>All analysis is performed locally on your device.</span><span>Your games and analysis stay on this computer.</span><span class="engine-state ${serviceOffline || state.job?.status === "failed" ? "offline" : ""}"><i></i>${serviceOffline ? "Start local API service" : state.job?.status === "failed" ? "Engine unavailable" : "Local service ready"}</span></footer>
   </div>
   ${importDialogMarkup()}`;
   bindEvents();

@@ -9,6 +9,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("Local API service is not running.");
+  }
   const body = (await response.json()) as T & ApiErrorBody;
   if (!response.ok) {
     throw new Error(body.error ?? `Request failed with HTTP ${response.status}`);
