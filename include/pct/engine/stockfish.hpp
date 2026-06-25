@@ -69,6 +69,7 @@ class Stockfish : public AnalysisEngine {
                                          CancellationToken stop_token = {}) override;
 
     [[nodiscard]] static std::optional<PrincipalVariation> parse_info_line(std::string_view line);
+    [[nodiscard]] static std::string resolve_executable(std::string requested = "stockfish");
 
   private:
     StockfishOptions options_;

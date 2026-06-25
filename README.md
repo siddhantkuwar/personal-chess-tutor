@@ -76,7 +76,8 @@ Optional full-corpus download and bounded conversion instructions are in
 - A C++20 compiler
 - Ninja or another CMake generator
 - libcurl development files
-- Stockfish available on `PATH`, or its path passed with `--stockfish`
+- Stockfish available on `PATH`, installed by Homebrew, set with `PCT_STOCKFISH`, or passed with
+  `--stockfish`
 - Node.js 20+ and npm for the browser build
 
 ## Build And Run
@@ -109,7 +110,7 @@ Useful server options:
 ```text
 --data-dir path    event log, snapshots, and regenerated indexes
 --web-root path    built frontend directory (default: web/dist)
---stockfish path   Stockfish executable (default: stockfish)
+--stockfish path   Stockfish executable (default: PCT_STOCKFISH, PATH, then Homebrew paths)
 --port number      loopback HTTP port (default: 8787)
 --workers count    isolated Stockfish and game workers (default: 2, maximum: 16)
 --max-pending n    bounded job and engine admission limit (default: 256)
@@ -145,12 +146,14 @@ scripts/security-check.sh
 scripts/race-check.sh
 scripts/profile-benchmarks.sh
 scripts/clean-install-smoke.sh
+scripts/real-stockfish-smoke.sh
 ```
 
 The first four checks have been run successfully on the current arm64 build. The clean-install
 script has also been run successfully: it packages the app, launches it on loopback with an
 isolated data directory, imports and analyzes the demo PGN, restarts, and reopens the persisted
-game.
+game. `scripts/real-stockfish-smoke.sh` verifies the same demo import through the HTTP server
+using the installed real Stockfish binary.
 
 ## macOS Package
 
@@ -169,7 +172,8 @@ restore, confirmed reset, and uninstall guidance.
 
 ## Troubleshooting
 
-- **Stockfish not found:** install it or pass `--stockfish /absolute/path/to/stockfish`.
+- **Stockfish not found:** install it with `brew install stockfish`, set `PCT_STOCKFISH`, or pass
+  `--stockfish /absolute/path/to/stockfish`.
 - **macOS blocks the downloaded app:** the free release is ad-hoc signed rather than notarized;
   right-click the app, choose Open, and confirm the one-time local exception.
 - **Frontend build missing:** run `npm ci --prefix web && npm run build --prefix web`.

@@ -30,6 +30,11 @@ TEST_CASE("persistent UCI process completes MultiPV analysis") {
     CHECK(engine.running());
 }
 
+TEST_CASE("Stockfish executable resolver accepts explicit paths and reports missing engines") {
+    CHECK_EQ(Stockfish::resolve_executable(PCT_FAKE_STOCKFISH_PATH), PCT_FAKE_STOCKFISH_PATH);
+    CHECK_THROWS(Stockfish::resolve_executable("/definitely/missing/stockfish"));
+}
+
 TEST_CASE("UCI timeout sends stop and leaves the engine reusable") {
     Stockfish engine(StockfishOptions{PCT_SLOW_STOCKFISH_PATH, 16, 1});
     AnalysisRequest request;

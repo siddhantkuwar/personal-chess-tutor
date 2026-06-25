@@ -13,6 +13,8 @@
 #include <cerrno>
 #include <charconv>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <sstream>
 #include <thread>
@@ -46,6 +48,41 @@ std::vector<std::string> words(std::string_view line) {
     return tokens;
 }
 
+bool executable_file(const std::filesystem::path& path) {
+    return !path.empty() && access(path.c_str(), X_OK) == 0;
+}
+
+std::optional<std::string> search_path(std::string_view executable) {
+    const char* path = std::getenv("PATH");
+    if (path == nullptr)
+        return std::nullopt;
+    std::string_view remaining(path);
+    while (!remaining.empty()) {
+        const std::size_t separator = remaining.find(':');
+        const std::string_view entry =
+            separator == std::string_view::npos ? remaining : remaining.substr(0, separator);
+        if (!entry.empty()) {
+            const std::filesystem::path candidate =
+                std::filesystem::path(std::string(entry)) / std::string(executable);
+            if (executable_file(candidate))
+                return candidate.string();
+        }
+        if (separator == std::string_view::npos)
+            break;
+        remaining.remove_prefix(separator + 1);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> common_stockfish_path() {
+    for (const std::filesystem::path candidate :
+         {"/opt/homebrew/bin/stockfish", "/usr/local/bin/stockfish", "/usr/games/stockfish"}) {
+        if (executable_file(candidate))
+            return candidate.string();
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 Stockfish::Stockfish(StockfishOptions options) : options_(std::move(options)) {}
@@ -58,9 +95,40 @@ bool Stockfish::running() const noexcept {
     return process_id_ > 0;
 }
 
+std::string Stockfish::resolve_executable(std::string requested) {
+    if (requested.empty())
+        requested = "stockfish";
+
+    if (requested == "stockfish") {
+        if (const char* environment = std::getenv("PCT_STOCKFISH");
+            environment != nullptr && environment[0] != '\0') {
+            requested = environment;
+        }
+    }
+
+    if (requested.find('/') != std::string::npos) {
+        if (executable_file(requested))
+            return requested;
+        throw Error(ErrorCode::EngineError,
+                    "Stockfish executable is missing or not executable: " + requested);
+    }
+
+    if (auto found = search_path(requested))
+        return *found;
+    if (requested == "stockfish") {
+        if (auto found = common_stockfish_path())
+            return *found;
+    }
+
+    throw Error(ErrorCode::EngineError,
+                "Stockfish executable was not found. Install it with 'brew install stockfish', "
+                "set PCT_STOCKFISH, or pass --stockfish /absolute/path/to/stockfish.");
+}
+
 void Stockfish::start() {
     if (running())
         return;
+    const std::string executable = resolve_executable(options_.executable);
     static const auto ignored_sigpipe = signal(SIGPIPE, SIG_IGN);
     static_cast<void>(ignored_sigpipe);
     int parent_to_child[2];
@@ -86,7 +154,7 @@ void Stockfish::start() {
         close(parent_to_child[1]);
         close(child_to_parent[0]);
         close(child_to_parent[1]);
-        execlp(options_.executable.c_str(), options_.executable.c_str(), nullptr);
+        execl(executable.c_str(), executable.c_str(), nullptr);
         _exit(127);
     }
     close(parent_to_child[0]);
@@ -103,7 +171,7 @@ void Stockfish::start() {
         send("setoption name Threads value " + std::to_string(options_.threads));
         send("isready");
         wait_for("readyok", std::chrono::seconds(5));
-        log(LogLevel::Info, "stockfish", "engine process is ready");
+        log(LogLevel::Info, "stockfish", "engine process is ready: " + executable);
     } catch (...) {
         stop();
         throw;
