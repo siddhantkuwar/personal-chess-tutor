@@ -32,6 +32,7 @@ interface State {
 }
 
 const initialFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+const blackPieces = new Set(["♟", "♜", "♞", "♝", "♛", "♚"]);
 const state: State = {
   game: null,
   selectedPly: 0,
@@ -124,10 +125,11 @@ function boardMarkup(): string {
       ${squares.map((square, index) => {
         const light = (Math.floor(index / 8) + index) % 2 === 0;
         const selected = highlighted?.includes(square.name) ?? false;
+        const pieceTone = square.piece ? (blackPieces.has(square.piece) ? "black-piece" : "white-piece") : "";
         return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell" data-square="${square.name}">
           ${square.file === "a" ? `<span class="rank-coordinate">${square.rank}</span>` : ""}
           ${square.rank === "1" ? `<span class="file-coordinate">${square.file}</span>` : ""}
-          <span class="piece" aria-label="${square.piece ? `piece on ${square.name}` : `empty ${square.name}`}">${square.piece}</span>
+          <span class="piece ${pieceTone}" aria-label="${square.piece ? `piece on ${square.name}` : `empty ${square.name}`}">${square.piece}</span>
         </div>`;
       }).join("")}
       ${arrowMarkup(highlighted)}
@@ -182,8 +184,9 @@ function progressPercent(): number {
 
 function gameSummaryMarkup(): string {
   const tags = state.game?.game.tags ?? {};
+  const result = tags.Result ?? "";
   return `<section class="game-summary">
-    <div class="players"><h2>${escapeHtml(tags.White ?? "No game imported")}<span> vs. </span>${escapeHtml(tags.Black ?? "")}</h2><strong>${escapeHtml(tags.Result ?? "")}</strong></div>
+    <div class="players"><h2>${escapeHtml(tags.White ?? "No game imported")}<span> vs. </span>${escapeHtml(tags.Black ?? "")}</h2>${result ? `<strong>${escapeHtml(result)}</strong>` : ""}</div>
     ${statusMarkup()}
     ${state.error ? `<p class="inline-error" role="alert">${escapeHtml(state.error)}</p>` : ""}
   </section>`;
@@ -313,7 +316,8 @@ function trainingBoardMarkup(drill: Drill | undefined): string {
   return `<div class="training-board board" role="grid" aria-label="Drill position">${squaresFromFen(fen).map((square, index) => {
     const light = (Math.floor(index / 8) + index) % 2 === 0;
     const selected = highlighted?.includes(square.name) ?? false;
-    return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell"><span class="piece">${square.piece}</span></div>`;
+    const pieceTone = square.piece ? (blackPieces.has(square.piece) ? "black-piece" : "white-piece") : "";
+    return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""}" role="gridcell"><span class="piece ${pieceTone}">${square.piece}</span></div>`;
   }).join("")}</div>`;
 }
 
