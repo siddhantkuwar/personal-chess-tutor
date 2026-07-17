@@ -20,7 +20,7 @@ glass is a surface treatment, never the product's main visual effect.
 | Phase | Status | Updated |
 | --- | --- | --- |
 | Phase 1 — Frictionless Chess.com ingest | **Complete** | 2026-07-16 |
-| Phase 2 — Review as the product | Planned; awaiting final design input | 2026-07-16 |
+| Phase 2 — Review as the product | **Complete** | 2026-07-16 |
 | Phase 3 — Explore and visual progress | Planned | 2026-07-16 |
 
 Phase 1 shipped as a backend and reliability phase with no UI changes. Its implementation includes
@@ -116,6 +116,8 @@ sync/reload an entire recent history without needing to find or paste PGN text.
 
 ## Phase 2 — Review as the product
 
+**Status: Complete — 2026-07-16**
+
 ### Outcome
 
 The main screen feels like a calm, high-quality analysis workspace. Board movement, candidate
@@ -174,6 +176,24 @@ working after it has finished. Instead, make observable analysis telemetry legib
   without opening developer tools.
 - The UI no longer presents train/daily-review as the core workflow.
 - Review loading feels deliberate without obscuring or faking engine activity.
+
+### Completion evidence
+
+- Review now uses a board-first graphite workspace with SVG pieces, a fixed evidence rail, and
+  responsive Review / Moves / Engine panel switching that leaves the mobile board visible.
+- The URL importer consumes the asynchronous Phase 1 resolution contract and shows truthful
+  link, archive, reconstruction, and analysis stages with a 320 ms anti-flicker dwell.
+- Engine Work distinguishes queued, active, complete, and failed states and exposes only available
+  operational facts: configured depth, completed lines, nodes, MultiPV, elapsed time, workers,
+  queue size, position progress, retry, and diagnostics. It explicitly does not imitate hidden
+  reasoning; live Stockfish depth/nodes remain unavailable until the backend emits them.
+- Better-move overlays share the board coordinate system and are covered for capture-shaped moves,
+  promotion parsing, and white/black orientation. Browser smoke confirmed the arrow mirrors after
+  a board flip without changing the board position.
+- The supplied Chess.com URL resolved in a fresh temporary instance to `superking116 vs.
+  CartaaaaZ`, reached deep analysis, and displayed completed depth/node telemetry.
+- Frontend type-check/build, native unit/ingest/integration suites, npm audit, sanitizer tests, and
+  static security checks pass.
 
 ---
 

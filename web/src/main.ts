@@ -1,11 +1,12 @@
 import "./styles.css";
-import { advanceDrillHint, beginDrillSession, completeResource, generateSupplementalDrills, importBatch, importGame, listGames, loadBatches, loadDrills, loadGame, loadProfile, loadResources, setQueuePaused, submitDrillAttempt } from "./api";
-import { squaresFromFen, uciSquares } from "./chess";
+import { advanceDrillHint, beginDrillSession, completeResource, generateSupplementalDrills, importBatch, importGameObservable, listGames, loadBatches, loadDiagnostics, loadDrills, loadGame, loadImportResolution, loadProfile, loadResources, loadRuntimeSettings, setQueuePaused, startAnalysis, submitDrillAttempt } from "./api";
+import { moveOverlayGeometry, squaresFromFen, uciSquares } from "./chess";
+import type { BoardOrientation } from "./chess";
 import { icons } from "./icons";
-import type { BatchProgress, Drill, Job, Mistake, Profile, ResourceRecommendation, StoredGame } from "./types";
+import type { BatchProgress, Diagnostics, Drill, Job, Mistake, Profile, ProgressSocketMessage, ResourceRecommendation, RuntimeSettings, StoredGame } from "./types";
 
-type MobileView = "game" | "moves" | "review";
-type AppMode = "game" | "training" | "progress";
+type MobileView = "review" | "moves" | "engine";
+type AppMode = "game" | "training" | "explore" | "progress";
 
 interface State {
   game: StoredGame | null;
@@ -29,6 +30,12 @@ interface State {
   batches: BatchProgress[];
   queuePaused: boolean;
   cacheHits: number;
+  engineExpanded: boolean;
+  jobStartedAt: number;
+  importStage: "idle" | "link" | "resolving" | "reconstructing" | "analyzing";
+  boardOrientation: BoardOrientation;
+  diagnostics: Diagnostics | null;
+  runtimeSettings: RuntimeSettings | null;
 }
 
 const initialFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -55,7 +62,7 @@ const state: State = {
   job: null,
   error: "",
   busy: false,
-  mobileView: "game",
+  mobileView: "review",
   mode: "game",
   drills: [],
   activeDrill: "",
@@ -69,6 +76,12 @@ const state: State = {
   batches: [],
   queuePaused: false,
   cacheHits: 0,
+  engineExpanded: false,
+  jobStartedAt: 0,
+  importStage: "idle",
+  boardOrientation: "white",
+  diagnostics: null,
+  runtimeSettings: null,
 };
 
 const root = document.querySelector<HTMLDivElement>("#app");
@@ -133,7 +146,7 @@ function activeUci(): string {
 
 function boardMarkup(): string {
   const highlighted = uciSquares(activeUci());
-  const squares = squaresFromFen(currentFen());
+  const squares = squaresFromFen(currentFen(), state.boardOrientation);
   return `<div class="board-wrap">
     <div class="board" role="grid" aria-label="Chess position">
       ${squares.map((square, index) => {
@@ -141,8 +154,8 @@ function boardMarkup(): string {
         const selected = highlighted?.includes(square.name) ?? false;
         const moveClass = highlighted?.[0] === square.name ? "from-square" : highlighted?.[1] === square.name ? "to-square" : "";
         return `<div class="square ${light ? "light" : "dark"} ${selected ? "selected" : ""} ${moveClass}" role="gridcell" data-square="${square.name}">
-          ${square.file === "a" ? `<span class="rank-coordinate">${square.rank}</span>` : ""}
-          ${square.rank === "1" ? `<span class="file-coordinate">${square.file}</span>` : ""}
+          ${index % 8 === 0 ? `<span class="rank-coordinate">${square.rank}</span>` : ""}
+          ${index >= 56 ? `<span class="file-coordinate">${square.file}</span>` : ""}
           ${pieceMarkup(square.piece, square.name)}
         </div>`;
       }).join("")}
@@ -175,15 +188,15 @@ function pieceSvg(kind: string): string {
 
 function arrowMarkup(highlighted: [string, string] | null): string {
   if (!state.highlightedUci || !highlighted) return "";
-  const center = (name: string): [number, number] => [
-    (name.charCodeAt(0) - 97 + 0.5) * 12.5,
-    (8 - Number(name[1]) + 0.5) * 12.5,
-  ];
-  const [x1, y1] = center(highlighted[0]);
-  const [x2, y2] = center(highlighted[1]);
+  const geometry = moveOverlayGeometry(state.highlightedUci, state.boardOrientation);
+  if (!geometry) return "";
+  const { x: x1, y: y1 } = geometry.source;
+  const { x: x2, y: y2 } = geometry.destination;
   return `<svg class="move-arrow" viewBox="0 0 100 100" aria-hidden="true">
-    <defs><marker id="arrowhead" markerWidth="5" markerHeight="5" refX="3" refY="2.5" orient="auto"><path d="M0 0 5 2.5 0 5Z"/></marker></defs>
+    <defs><marker id="arrowhead" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto"><path d="M0 0 6 3 0 6Z"/></marker></defs>
+    <circle class="arrow-origin" cx="${x1}" cy="${y1}" r="3.4"/>
     <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" marker-end="url(#arrowhead)"/>
+    <circle class="arrow-target" cx="${x2}" cy="${y2}" r="5.1"/>
   </svg>`;
 }
 
@@ -266,6 +279,54 @@ function evaluationMarkup(): string {
   </div>`;
 }
 
+function engineWorkMarkup(): string {
+  const job = state.job;
+  const progress = job?.progress;
+  const active = job?.status === "queued" || job?.status === "running";
+  const failed = job?.status === "failed";
+  const complete = state.game?.analysis_status === "complete" || job?.status === "complete";
+  const currentMistake = state.game?.analysis?.mistakes[state.expandedMistake];
+  const line = currentMistake?.engine.lines[0];
+  const diagnostics = state.diagnostics;
+  const elapsed = state.jobStartedAt ? Math.max(0, Math.round((Date.now() - state.jobStartedAt) / 1000)) : 0;
+  const stage = !state.game ? "Waiting for a game" : failed ? "Engine stopped" : complete ? "Analysis complete" : progress?.stage === "deep_analysis" ? "Deep analysis active" : progress?.stage === "shallow_scan" ? "Shallow scan active" : job?.status === "queued" ? "Queued for engine" : "Preparing positions";
+  const stageFacts = [
+    state.game ? "PGN reconstructed into legal positions" : "Waiting for a valid PGN",
+    progress?.stage === "shallow_scan" || progress?.stage === "deep_analysis" || complete
+      ? `Shallow scan ${progress?.stage === "shallow_scan" ? `${progress.complete}/${progress.total}` : "complete"}`
+      : "Shallow scan pending",
+    progress?.stage === "deep_analysis"
+      ? `Deep candidates ${progress.complete}/${progress.total}`
+      : complete ? `${state.game?.analysis?.mistakes.length ?? 0} critical moments selected` : "Deep candidates pending",
+  ];
+  return `<section class="engine-work ${active ? "is-active" : ""} ${failed ? "is-failed" : ""}" aria-labelledby="engine-work-title">
+    <button class="engine-work-heading" data-engine-toggle aria-expanded="${state.engineExpanded}">
+      <span class="engine-orb" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><small>Stockfish · local</small><strong id="engine-work-title">${escapeHtml(stage)}</strong></span>
+      <span class="engine-badge">${active ? "Live" : failed ? "Failed" : complete ? "Ready" : "Idle"}</span>
+      ${icons.chevron}
+    </button>
+    ${state.engineExpanded ? `<div class="engine-work-body">
+      <div class="engine-telemetry">
+        <div><small>Depth</small><strong>${active ? `target ${state.runtimeSettings?.deep_depth ?? "—"}` : line?.depth ?? "—"}</strong></div>
+        <div><small>Nodes</small><strong>${line ? compactNumber(line.nodes) : "—"}</strong></div>
+        <div><small>Workers</small><strong>${diagnostics ? `${diagnostics.engine_active}/${diagnostics.engine_workers}` : "—"}</strong></div>
+        <div><small>Queue</small><strong>${diagnostics ? diagnostics.queued_interactive + diagnostics.queued_current_game + diagnostics.queued_historical : "—"}</strong></div>
+        <div><small>MultiPV</small><strong>${line?.multipv ?? "—"}</strong></div>
+        <div><small>Elapsed</small><strong data-engine-elapsed>${elapsed ? `${elapsed}s` : line ? `${Math.round(line.time_ms / 1000)}s` : "—"}</strong></div>
+      </div>
+      <ol class="stage-log">${stageFacts.map((fact, index) => `<li class="${index === 0 || (index === 1 && (progress?.stage === "shallow_scan" || progress?.stage === "deep_analysis" || complete)) || (index === 2 && (progress?.stage === "deep_analysis" || complete)) ? "complete" : ""}">${escapeHtml(fact)}</li>`).join("")}</ol>
+      <div class="latest-line"><small>Latest principal variation</small><code>${escapeHtml(line?.moves.join(" ") ?? "Available when a critical position completes")}</code></div>
+      ${failed ? `<div class="engine-actions"><button class="primary-action" data-analysis-retry>Retry analysis</button><a href="/api/diagnostics" target="_blank" rel="noreferrer">View diagnostics</a></div>` : ""}
+      <p class="engine-disclosure">Shows observable engine telemetry and stage facts—not hidden reasoning.</p>
+    </div>` : ""}
+  </section>`;
+}
+
+function compactNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
 function formatEval(value: number | undefined): string {
   if (value === undefined) return "–";
   const pawns = value / 100;
@@ -281,6 +342,7 @@ function navigationMarkup(): string {
     <div><strong>${selected ? `${Math.floor(state.selectedPly / 2) + 1}${state.selectedPly % 2 ? "..." : "."} ${escapeHtml(selected.san)}` : "Starting position"}</strong><span>${selected ? (state.selectedPly % 2 ? "White to move" : "Black to move") : "White to move"}</span></div>
     <button data-nav="next" aria-label="Next move" ${state.selectedPly >= plies.length - 1 ? "disabled" : ""}>›</button>
     <button data-nav="last" aria-label="Last move" ${!plies.length ? "disabled" : ""}>›|</button>
+    <button data-flip aria-label="Flip board" title="Flip board">↻</button>
   </div>`;
 }
 
@@ -321,12 +383,29 @@ function mistakeTitle(category: string): string {
 }
 
 function mobileTabsMarkup(): string {
-  return `<nav class="mobile-tabs" aria-label="Game sections">
-    ${(["game", "moves", "review"] as const).map((view) => `<button data-view="${view}" class="${state.mobileView === view ? "active" : ""}">${view === "game" ? "▦" : view === "moves" ? "☷" : "☆"}<span>${view[0]?.toUpperCase()}${view.slice(1)}</span></button>`).join("")}
+  return `<nav class="mobile-tabs" role="tablist" aria-label="Review panels">
+    ${(["review", "moves", "engine"] as const).map((view) => `<button role="tab" aria-selected="${state.mobileView === view}" aria-controls="${view}-panel" data-view="${view}" class="${state.mobileView === view ? "active" : ""}"><span>${view[0]?.toUpperCase()}${view.slice(1)}</span></button>`).join("")}
   </nav>`;
 }
 
+function importLoadingMarkup(): string {
+  if (!state.busy) return "";
+  const stages = [
+    ["link", "Reading link"],
+    ["resolving", "Finding public archive"],
+    ["reconstructing", "Reconstructing positions"],
+    ["analyzing", "Starting Stockfish"],
+  ] as const;
+  const activeIndex = Math.max(0, stages.findIndex(([key]) => key === state.importStage));
+  return `<section class="import-loading" aria-live="polite"><div class="loading-wave" aria-hidden="true">${Array.from({ length: 7 }, () => "<i></i>").join("")}</div><div><small>Preparing your review</small><strong>${stages[activeIndex]?.[1] ?? "Reading game"}</strong></div><ol>${stages.map(([key, label], index) => `<li class="${index < activeIndex ? "done" : index === activeIndex ? "active" : ""}" data-stage="${key}">${label}</li>`).join("")}</ol></section>`;
+}
+
 function render(): void {
+  if (state.mode === "explore") {
+    app.innerHTML = exploreShellMarkup();
+    bindTrainingEvents();
+    return;
+  }
   if (state.mode !== "game") {
     app.innerHTML = trainingShellMarkup();
     bindTrainingEvents();
@@ -334,18 +413,24 @@ function render(): void {
   }
   const serviceOffline = state.error === "Local API service is not running.";
   app.innerHTML = `<div class="app-shell">
-    <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game" class="active">${icons.book}<span>Study</span></button><button data-mode="training">${icons.chevron}<span>Train</span></button><button data-mode="progress">${icons.chart}<span>Progress</span></button></nav><button class="menu-button" aria-label="Menu">${icons.menu}</button></header>
-    <button class="import-bar" id="open-import">${icons.upload}<strong>${state.busy ? "Importing…" : "Import game"}</strong><span>Drag &amp; drop a .pgn file or paste PGN</span>${icons.chevron}</button>
+    <header class="app-header"><a href="/" class="brand"><span class="brand-mark" aria-hidden="true">${pieceSvg("knight")}</span><span>Personal Chess Tutor<small>Local analysis studio</small></span></a><nav><button data-mode="game" class="active" aria-current="page"><span>Review</span></button><button data-mode="explore"><span>Explore</span></button><button data-mode="progress"><span>Progress</span></button></nav><button class="menu-button" aria-label="Menu">${icons.menu}</button></header>
     <main class="workspace ${state.mobileView}">
+      <button class="import-bar" id="open-import">${icons.upload}<span><strong>${state.busy ? "Resolving game" : "Import a game"}</strong><small>Chess.com link or PGN</small></span>${icons.chevron}</button>
+      ${importLoadingMarkup()}
       <div class="summary-region">${gameSummaryMarkup()}</div>
-      <section class="board-region">${boardMarkup()}${navigationMarkup()}${mobileTabsMarkup()}</section>
-      <aside class="analysis-region">${moveListMarkup()}${evaluationMarkup()}</aside>
-      <div class="review-region">${reviewMarkup()}</div>
+      <section class="board-region"><div class="board-stage">${boardMarkup()}</div>${navigationMarkup()}${mobileTabsMarkup()}</section>
+      <aside id="moves-panel" role="tabpanel" class="analysis-region panel-slot">${moveListMarkup()}${evaluationMarkup()}</aside>
+      <div id="review-panel" role="tabpanel" class="review-region panel-slot">${reviewMarkup()}</div>
+      <div id="engine-panel" role="tabpanel" class="engine-region panel-slot">${engineWorkMarkup()}</div>
     </main>
-    <footer class="local-status"><span>All analysis is performed locally on your device.</span><span>Your games and analysis stay on this computer.</span><span class="engine-state ${serviceOffline || state.job?.status === "failed" ? "offline" : ""}"><i></i>${serviceOffline ? "Start local API service" : state.job?.status === "failed" ? "Engine unavailable" : "Local service ready"}</span></footer>
+    <footer class="local-status"><span class="privacy-note">Private by design · games never leave this computer</span><span class="engine-state ${serviceOffline || state.job?.status === "failed" ? "offline" : ""}"><i></i>${serviceOffline ? "Start local API service" : state.job?.status === "failed" ? "Engine unavailable" : "Stockfish ready"}</span></footer>
   </div>
   ${importDialogMarkup()}`;
   bindEvents();
+}
+
+function exploreShellMarkup(): string {
+  return `<div class="learning-shell explore"><header class="app-header"><a href="/" class="brand"><span class="brand-mark">♞</span><span>Personal Chess Tutor<small>Local analysis studio</small></span></a><nav><button data-mode="game"><span>Review</span></button><button data-mode="explore" class="active"><span>Explore</span></button><button data-mode="progress"><span>Progress</span></button></nav></header><main class="explore-main"><p class="overline">Phase 3 preview</p><h1>A quiet library for positions worth remembering.</h1><p>Openings, middlegames, and endgames will connect concepts directly to moments from your own games. The old daily-training dashboard is intentionally out of the primary workflow.</p><div class="explore-paths"><article><span>01</span><h2>Openings</h2><p>Plans, move trees, and departures seen in your games.</p></article><article><span>02</span><h2>Middlegames</h2><p>Structures, tactical motifs, and recurring decisions.</p></article><article><span>03</span><h2>Endgames</h2><p>Essential techniques linked to exact positions.</p></article></div><button data-mode="game" class="primary-action">Return to review</button></main></div>`;
 }
 
 function trainingBoardMarkup(drill: Drill | undefined): string {
@@ -389,7 +474,7 @@ function trainingShellMarkup(): string {
   const hint = !drill ? "" : state.shownHint === 0 ? "No hint yet. First identify what changed and calculate forcing moves." : state.shownHint === 1 ? "The relevant piece's starting square is highlighted." : state.shownHint === 2 ? `Candidate moves: ${drill.solutions.join(", ")}` : `Solution: ${drill.solutions[0]}. ${drill.explanation}`;
   const hintAvailable = Boolean(drill && state.shownHint < drill.available_hint_level);
   return `<div class="learning-shell ${state.mode}">
-    <header class="app-header"><a href="/" class="brand">Personal Chess Tutor</a><nav><button data-mode="game">${icons.book}<span>Study</span></button><button data-mode="training" class="${state.mode === "training" ? "active" : ""}">${icons.chevron}<span>Train</span></button><button data-mode="progress" class="${state.mode === "progress" ? "active" : ""}">${icons.chart}<span>Progress</span></button></nav></header>
+    <header class="app-header"><a href="/" class="brand"><span class="brand-mark">♞</span><span>Personal Chess Tutor<small>Local analysis studio</small></span></a><nav><button data-mode="game"><span>Review</span></button><button data-mode="explore"><span>Explore</span></button><button data-mode="progress" class="${state.mode === "progress" ? "active" : ""}"><span>Progress</span></button></nav></header>
     <main class="learning-main">
       <header class="learning-heading"><div><p class="overline">Personalized training · ${due} ready today</p><h1>${state.mode === "training" ? "Turn mistakes into stronger habits." : "Progress you can trace back to games."}</h1></div><p>Every count comes from your local event log. No composite score.</p></header>
       <section class="metrics">${metric(String(profile?.games_analyzed ?? 0), "games deep analyzed", `${profile?.games_shallow_analyzed ?? 0} shallow ready · ${profile?.games_imported ?? 0} imported`)}${metric(`${Math.round((profile?.drill_accuracy ?? 0) * 100)}%`, "drill accuracy", `${profile?.drill_correct ?? 0} of ${profile?.drill_attempts ?? 0} · ${Math.round((profile?.retention_rate ?? 0) * 100)}% retained (${profile?.retained_reviews ?? 0}/${profile?.retention_reviews ?? 0})`)}${metric((profile?.average_centipawn_loss ?? 0).toFixed(0), "average CP loss", `${profile?.total_positions ?? 0} positions`)}${metric(String(due), "reviews ready", `${state.drills.length} drills total`)}</section>
@@ -460,12 +545,11 @@ function bindTrainingEvents(): void {
 }
 
 function importDialogMarkup(): string {
-  return `<dialog id="import-dialog"><form method="dialog" class="dialog-shell"><header><h2>Import a game</h2><button value="cancel" aria-label="Close">×</button></header>
-    <label>Chess.com game URL<input id="game-url" type="url" placeholder="https://www.chess.com/game/live/…" autocomplete="url"></label>
-    <div class="or"><span>or paste PGN</span></div>
-    <label><span class="sr-only">PGN</span><textarea id="game-pgn" placeholder="[Event &quot;…&quot;]&#10;&#10;1. e4 e5 …"></textarea></label>
+  return `<dialog id="import-dialog"><form method="dialog" class="dialog-shell"><header><div><p class="overline">New review</p><h2>Bring in a game.</h2><p>Paste a public Chess.com link. We’ll identify the players, find the exact archive PGN, and start local analysis.</p></div><button value="cancel" aria-label="Close">×</button></header>
+    <label class="link-input"><span>Chess.com game link</span><input id="game-url" type="url" placeholder="https://www.chess.com/game/live/171626462440" autocomplete="url"></label>
+    <details class="pgn-fallback"><summary>Use PGN instead</summary><label><span class="sr-only">PGN</span><textarea id="game-pgn" placeholder="[Event &quot;…&quot;]&#10;&#10;1. e4 e5 …"></textarea></label></details>
     <p class="dialog-error" role="alert">${escapeHtml(state.error)}</p>
-    <footer><button value="cancel" class="secondary-action">Cancel</button><button value="default" id="submit-import" class="primary-action">Import and analyze</button></footer>
+    <footer><span>Public data only · no Chess.com password</span><button value="default" id="submit-import" class="primary-action">Open review ${icons.chevron}</button></footer>
   </form></dialog>`;
 }
 
@@ -505,6 +589,10 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-nav]").forEach((button) => {
     button.addEventListener("click", () => navigate(button.dataset.nav ?? ""));
   });
+  document.querySelector<HTMLButtonElement>("[data-flip]")?.addEventListener("click", () => {
+    state.boardOrientation = state.boardOrientation === "white" ? "black" : "white";
+    render();
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-mistake]").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.mistake);
@@ -526,6 +614,22 @@ function bindEvents(): void {
       state.mobileView = (button.dataset.view as MobileView) ?? "game";
       render();
     });
+  });
+  document.querySelector<HTMLButtonElement>("[data-engine-toggle]")?.addEventListener("click", () => {
+    state.engineExpanded = !state.engineExpanded;
+    if (state.engineExpanded) void refreshEngineFacts();
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("[data-analysis-retry]")?.addEventListener("click", async () => {
+    if (!state.game) return;
+    try {
+      state.jobStartedAt = Date.now();
+      state.job = await startAnalysis(state.game.game.id);
+      state.error = "";
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "Could not restart analysis.";
+    }
+    render();
   });
 }
 
@@ -558,21 +662,66 @@ async function submitImport(): Promise<void> {
 }
 
 async function runImport(input: { url: string } | { pgn: string }): Promise<void> {
+  const startedAt = Date.now();
   state.busy = true;
   state.error = "";
+  state.importStage = "link";
   render();
   try {
-    const result = await importGame(input);
-    state.job = result.job;
-    state.game = await loadGame(result.game_id);
+    const result = await importGameObservable(input);
+    let gameId: string;
+    if (result.status === "resolving") {
+      state.importStage = "resolving";
+      render();
+      let resolution = result.resolution;
+      while (resolution.status === "queued" || resolution.status === "running") {
+        await delay(250);
+        resolution = await loadImportResolution(result.resolution_id);
+      }
+      if (resolution.status !== "resolved" || !resolution.imported_game_id) {
+        throw new Error(resolution.error || "Chess.com import could not be resolved.");
+      }
+      gameId = resolution.imported_game_id;
+      state.importStage = "reconstructing";
+      render();
+      state.game = await loadGame(gameId);
+      state.importStage = "analyzing";
+      state.jobStartedAt = Date.now();
+      state.job = await startAnalysis(gameId);
+    } else {
+      gameId = result.game_id;
+      state.importStage = "reconstructing";
+      render();
+      state.job = result.job;
+      state.jobStartedAt = Date.now();
+      state.game = await loadGame(gameId);
+      state.importStage = "analyzing";
+    }
     state.selectedPly = Math.max(0, state.game.game.plies.length - 1);
     state.expandedMistake = 0;
+    await refreshEngineFacts();
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Import failed.";
   } finally {
+    const remainingDwell = 320 - (Date.now() - startedAt);
+    if (remainingDwell > 0) await delay(remainingDwell);
     state.busy = false;
+    state.importStage = "idle";
     render();
     if (state.error) document.querySelector<HTMLDialogElement>("#import-dialog")?.showModal();
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function refreshEngineFacts(): Promise<void> {
+  try {
+    [state.diagnostics, state.runtimeSettings] = await Promise.all([loadDiagnostics(), loadRuntimeSettings()]);
+    if (state.mode === "game") render();
+  } catch {
+    // Job progress remains useful if optional diagnostics are unavailable.
   }
 }
 
@@ -592,14 +741,16 @@ function connectProgress(): void {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as
-      | { type: "job_update"; job: Job }
-      | { type: "jobs_snapshot"; jobs: Job[] };
+    const message = JSON.parse(String(event.data)) as ProgressSocketMessage;
+    if (message.type !== "job_update" && message.type !== "jobs_snapshot") return;
+    if (!state.game) return;
     const job = message.type === "job_update"
       ? message.job
       : message.jobs.find((candidate) => !state.game || candidate.game_id === state.game.game.id);
     if (!job || (state.game && job.game_id !== state.game.game.id)) return;
     state.job = job;
+    if ((job.status === "queued" || job.status === "running") && !state.jobStartedAt) state.jobStartedAt = Date.now();
+    if (job.status === "running") void refreshEngineFacts();
     if (job.status === "complete") {
       void refreshGame();
       void refreshTraining();
@@ -612,14 +763,25 @@ function connectProgress(): void {
 async function start(): Promise<void> {
   render();
   connectProgress();
+  window.setInterval(() => {
+    const elapsed = document.querySelector<HTMLElement>("[data-engine-elapsed]");
+    if (elapsed && state.jobStartedAt && (state.job?.status === "queued" || state.job?.status === "running")) {
+      elapsed.textContent = `${Math.max(0, Math.round((Date.now() - state.jobStartedAt) / 1000))}s`;
+    }
+  }, 1000);
   try {
-    const [games] = await Promise.all([listGames(), refreshTraining()]);
+    const games = await listGames();
     if (games[0]) {
       state.game = await loadGame(games[0].game.id);
       state.selectedPly = Math.max(0, state.game.game.plies.length - 1);
     }
   } catch (error) {
     state.error = error instanceof Error ? error.message : "Local service is unavailable.";
+  }
+  try {
+    await refreshTraining();
+  } catch {
+    // Review remains available if optional learning projections are unavailable.
   }
   render();
 }

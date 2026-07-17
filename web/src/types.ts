@@ -213,3 +213,143 @@ export interface Job {
   };
   error: string;
 }
+
+export type AnalysisStage = Job["progress"]["stage"];
+export type JobStatus = Job["status"];
+
+/**
+ * Runtime facts reported by the engine/job system. These are operational
+ * counters, not a representation of private reasoning or hidden thought.
+ */
+export interface Diagnostics {
+  engine_workers: number;
+  engine_submitted: number;
+  engine_completed: number;
+  engine_failed: number;
+  engine_retried: number;
+  engine_rejected: number;
+  engine_active: number;
+  queued_interactive: number;
+  queued_current_game: number;
+  queued_historical: number;
+  maximum_queue_latency_ms: number;
+  job_workers: number;
+  jobs_queued: number;
+  job_queue_capacity: number;
+  analysis_cache_hits: number;
+  analysis_cache_misses: number;
+  analysis_cache_evictions: number;
+  analysis_cache_entries: number;
+  analysis_cache_capacity: number;
+}
+
+export interface RuntimeSettings {
+  bind_address: string;
+  shallow_depth: number;
+  deep_depth: number;
+  top_mistakes: number;
+  job_workers: number;
+  job_queue_capacity: number;
+  storage: string;
+}
+
+export type RecoveryAction =
+  | "configure_profile"
+  | "search_date_window"
+  | "retry"
+  | "paste_pgn"
+  | "cancel_current"
+  | (string & {});
+
+export interface ApiFailure {
+  error: string;
+  code?: string;
+  actions?: RecoveryAction[];
+}
+
+export interface ChessComProfile {
+  username: string;
+  normalized_username: string;
+  selected_time_controls: string[];
+  archive_cursor: string;
+  last_successful_sync_ms: number;
+  last_error: string;
+}
+
+export interface ChessComProfileResponse {
+  connected: boolean;
+  profile: ChessComProfile | null;
+}
+
+export type ImportResolutionStatus =
+  | "queued"
+  | "running"
+  | "resolved"
+  | "needs_recovery"
+  | "cancelled";
+
+export interface ImportResolution {
+  id: string;
+  status: ImportResolutionStatus;
+  url: string;
+  canonical_url: string;
+  game_id: string;
+  username: string;
+  source: "" | "local_archive" | "profile_archive" | "public_page";
+  imported_game_id: string;
+  code: string;
+  error: string;
+  actions: RecoveryAction[];
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface ImportedGameResponse {
+  status: "imported";
+  duplicate: boolean;
+  game_id: string;
+  job: Job;
+}
+
+export interface ResolvingImportResponse {
+  status: "resolving";
+  resolution_id: string;
+  resolution: ImportResolution;
+}
+
+export type ImportGameResponse = ImportedGameResponse | ResolvingImportResponse;
+
+export type IngestSyncStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface IngestSync {
+  id: string;
+  status: IngestSyncStatus;
+  username: string;
+  days: 7 | 30 | 90;
+  max_months: number;
+  cutoff_ms: number;
+  upper_bound_ms: number;
+  current_month: string;
+  months_completed: number;
+  games_indexed: number;
+  code: string;
+  error: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface IngestSnapshot {
+  resolutions: ImportResolution[];
+  syncs: IngestSync[];
+  queued_interactive: number;
+  queued_historical: number;
+  queue_capacity: number;
+}
+
+export type ProgressSocketMessage =
+  | { type: "job_update"; job: Job }
+  | { type: "jobs_snapshot"; jobs: Job[] }
+  | { type: "ingest_update"; event: "resolution"; payload: ImportResolution }
+  | { type: "ingest_update"; event: "sync"; payload: IngestSync }
+  | { type: "ingest_update"; event: "profile"; payload: ChessComProfile }
+  | { type: "ingest_snapshot"; ingest: IngestSnapshot };
