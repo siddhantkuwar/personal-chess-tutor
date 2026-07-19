@@ -261,21 +261,32 @@ function arrowMarkup(highlighted: [string, string] | null): string {
 function statusMarkup(): string {
   const progress = state.job?.progress;
   const complete = state.game?.analysis_status === "complete" || state.job?.status === "complete";
-  const shallowDone = complete || progress?.stage === "deep_analysis" || progress?.stage === "complete";
   const parsedDone = Boolean(state.game);
-  const status = (done: boolean, active: boolean, text: string) =>
-    `<span class="analysis-step ${done ? "done" : ""} ${active ? "active" : ""}"><span class="status-mark">${done ? "✓" : ""}</span>${text}</span>`;
-  const deepText = complete
-    ? "Deep analysis"
+  const shallowDone = complete || progress?.stage === "deep_analysis" || progress?.stage === "complete";
+  const activeStage = !parsedDone ? 0 : !shallowDone ? 1 : 2;
+  const headline = complete
+    ? "Review ready"
     : progress?.stage === "deep_analysis"
-      ? `Deep analysis ${progress.complete} of ${progress.total}`
-      : "Deep analysis waiting";
-  return `<div class="analysis-steps">
-    ${status(parsedDone, !parsedDone, "Parsed")}
-    ${status(shallowDone, progress?.stage === "shallow_scan", progress?.stage === "shallow_scan" ? `Shallow scan ${progress.complete} of ${progress.total}` : "Shallow scan")}
-    ${status(complete, progress?.stage === "deep_analysis", deepText)}
-  </div>
-  <div class="progress-track"><span style="width:${progressPercent()}%"></span></div>`;
+      ? "Reading the critical positions"
+      : progress?.stage === "shallow_scan"
+        ? "Mapping the game"
+        : "Reconstructing the position";
+  const detail = complete
+    ? `${state.game?.analysis?.moves.length ?? 0} plies classified · local Stockfish`
+    : progress?.total
+      ? `${progress.complete} of ${progress.total} positions · ${Math.round(progressPercent())}%`
+      : "Preparing local engine evidence";
+  const steps = [
+    { label: "Parsed", done: parsedDone },
+    { label: "Shallow scan", done: shallowDone },
+    { label: "Deep analysis", done: complete },
+  ];
+  return `<section class="analysis-status ${complete ? "is-complete" : "is-running"}" aria-live="polite">
+    <div class="analysis-kinetic" aria-hidden="true"><span></span><span></span><span></span><i>${complete ? "✓" : ""}</i></div>
+    <div class="analysis-copy"><small>${complete ? "Analysis complete" : "Stockfish is working locally"}</small><strong>${headline}</strong><span>${detail}</span></div>
+    <div class="analysis-sequence" aria-label="Analysis stages">${steps.map((step, index) => `<div class="${step.done ? "done" : index === activeStage ? "active" : ""}"><i>${step.done ? "✓" : index + 1}</i><span>${step.label}</span></div>`).join("")}</div>
+    <div class="analysis-beam" aria-hidden="true"><svg viewBox="0 0 100 3" preserveAspectRatio="none"><rect class="beam-track" width="100" height="3"/><rect class="beam-fill" width="${progressPercent()}" height="3"/></svg></div>
+  </section>`;
 }
 
 function progressPercent(): number {
@@ -465,7 +476,12 @@ function classificationSummaryMarkup(): string {
   const order = ["Brilliant", "Great", "Best", "Excellent", "Good", "Book", "Inaccuracy", "Mistake", "Miss", "Blunder"];
   const white = classificationCounts(moves, "white");
   const black = classificationCounts(moves, "black");
-  return `<details class="classification-summary"><summary>Game classification summary</summary><div class="summary-table"><span>Move</span><strong>White</strong><strong>Black</strong>${order.map((label) => `<span class="classification-${classificationClass(label)}">${label}</span><b>${white[label] ?? 0}</b><b>${black[label] ?? 0}</b>`).join("")}</div></details>`;
+  const tags = state.game?.game.tags ?? {};
+  const distribution = (counts: Record<string, number>) => `<div class="summary-distribution">${order.flatMap((label) => Array.from({ length: counts[label] ?? 0 }, (_, index) => `<i class="classification-${classificationClass(label)}"><span class="sr-only">${label} ${index + 1} of ${counts[label]}</span></i>`)).join("")}</div>`;
+  return `<section class="classification-summary open"><header><div><small>Move quality</small><h3>Game classification</h3></div><span>${moves.length} plies analyzed</span></header>
+    <div class="summary-sides"><div><strong>${escapeHtml(tags.White ?? "White")}</strong>${distribution(white)}</div><div><strong>${escapeHtml(tags.Black ?? "Black")}</strong>${distribution(black)}</div></div>
+    <div class="summary-table"><span class="summary-heading">Classification</span><strong>White</strong><strong>Black</strong>${order.map((label) => `<span class="summary-label classification-${classificationClass(label)}"><i></i>${label}</span><b class="${white[label] ? "has-value" : ""}">${white[label] ?? 0}</b><b class="${black[label] ? "has-value" : ""}">${black[label] ?? 0}</b>`).join("")}</div>
+  </section>`;
 }
 
 function evaluationRailMarkup(): string {
@@ -474,16 +490,45 @@ function evaluationRailMarkup(): string {
   const whiteShare = Math.max(4, Math.min(96, 50 + value / 12));
   return `<aside class="evaluation-rail" aria-label="Current engine evaluation">
     <span class="eval-score">${formatEval(move?.evaluation_after)}</span>
-    <div class="eval-meter"><i style="height:${whiteShare}%"></i></div>
+    <svg class="eval-meter" viewBox="0 0 14 100" preserveAspectRatio="none" aria-hidden="true"><rect class="eval-black" width="14" height="100"/><rect class="eval-white" y="${100 - whiteShare}" width="14" height="${whiteShare}"/><line x1="0" x2="14" y1="50" y2="50"/></svg>
     <span class="eval-side">White</span>
   </aside>`;
 }
 
 function evaluationGraphMarkup(): string {
   const moves = state.game?.analysis?.moves ?? [];
-  const values = moves.map((move) => Math.max(-600, Math.min(600, move.evaluation_after)));
-  const points = values.map((value, index) => `${values.length <= 1 ? 0 : (index / (values.length - 1)) * 100},${30 - value / 30}`).join(" ");
-  return `<div class="inspector-graph"><svg viewBox="0 0 100 60" preserveAspectRatio="none" aria-label="Evaluation through the game"><line x1="0" y1="30" x2="100" y2="30"/><polyline points="${points}"/>${values.map((value, index) => `<circle class="${index === state.selectedPly ? "selected" : ""}" data-eval-ply="${index}" tabindex="0" cx="${values.length <= 1 ? 0 : (index / (values.length - 1)) * 100}" cy="${30 - value / 30}" r="${index === state.selectedPly ? 2 : 1.2}"/>`).join("")}</svg><p>Selected marker follows the board and scoresheet.</p></div>`;
+  if (!moves.length) return `<div class="inspector-empty">The evaluation timeline appears after analysis.</div>`;
+  const width = 920;
+  const height = 270;
+  const plot = { left: 52, right: 24, top: 28, bottom: 54 };
+  const values = moves.map((move) => move.evaluation_after);
+  const maxAbs = Math.max(...values.map(Math.abs), 200);
+  const range = Math.min(1000, Math.max(300, Math.ceil(maxAbs / 100) * 100));
+  const x = (index: number) => plot.left + (index / Math.max(1, moves.length - 1)) * (width - plot.left - plot.right);
+  const y = (value: number) => plot.top + ((range - Math.max(-range, Math.min(range, value))) / (range * 2)) * (height - plot.top - plot.bottom);
+  const zeroY = y(0);
+  const line = values.map((value, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)} ${y(value).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(values.length - 1).toFixed(1)} ${zeroY.toFixed(1)} L${x(0).toFixed(1)} ${zeroY.toFixed(1)} Z`;
+  const current = moves[state.selectedPly] ?? moves[0];
+  const selectedX = x(state.selectedPly);
+  const selectedY = y(current?.evaluation_after ?? 0);
+  const keyLabels = new Set(["Brilliant", "Great", "Inaccuracy", "Mistake", "Miss", "Blunder"]);
+  const labelEvery = Math.max(1, Math.ceil(moves.length / 6));
+  return `<div class="inspector-graph">
+    <header class="graph-reading"><div><small>${current?.move_number}${current?.side === "black" ? "…" : "."} ${escapeHtml(current?.played_san || current?.san || "Position")}</small><strong>${formatEval(current?.evaluation_after)}</strong></div><span class="classification-${classificationClass(current?.classification ?? "pending")}"><i></i>${escapeHtml(current?.classification ?? "Pending")}</span><p>${escapeHtml(classificationHeadline(current))}</p></header>
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Engine evaluation by move with classification markers">
+      <defs><linearGradient id="evaluation-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8bd3b0" stop-opacity=".18"/><stop offset="1" stop-color="#8bd3b0" stop-opacity="0"/></linearGradient></defs>
+      ${[-range, 0, range].map((value) => `<line class="graph-grid ${value === 0 ? "zero" : ""}" x1="${plot.left}" x2="${width - plot.right}" y1="${y(value)}" y2="${y(value)}"/><text class="graph-y-label" x="${plot.left - 10}" y="${y(value) + 4}" text-anchor="end">${value === 0 ? "EVEN" : formatEval(value)}</text>`).join("")}
+      <path class="graph-area" d="${area}"/>
+      <path class="graph-line" d="${line}"/>
+      ${moves.map((move, index) => `<rect class="graph-classification classification-${classificationClass(move.classification)}" x="${x(index) - 3.5}" y="${height - 24}" width="7" height="7" rx="2"><title>${move.move_number}${move.side === "black" ? "…" : "."} ${escapeHtml(move.played_san || move.san)} · ${escapeHtml(move.classification)}</title></rect>`).join("")}
+      ${moves.map((move, index) => index % labelEvery === 0 || index === moves.length - 1 ? `<text class="graph-x-label" x="${x(index)}" y="${height - 35}" text-anchor="middle">${move.move_number}</text>` : "").join("")}
+      <line class="graph-selected-guide" x1="${selectedX}" x2="${selectedX}" y1="${plot.top}" y2="${height - plot.bottom}"/>
+      ${moves.map((move, index) => `<circle class="graph-point ${keyLabels.has(move.classification) ? "key" : ""} ${index === state.selectedPly ? "selected" : ""} classification-${classificationClass(move.classification)}" data-eval-ply="${index}" tabindex="0" role="button" aria-label="Move ${move.move_number}${move.side === "black" ? " black" : " white"} ${escapeHtml(move.played_san || move.san)}, ${escapeHtml(move.classification)}, evaluation ${formatEval(move.evaluation_after)}" cx="${x(index)}" cy="${y(move.evaluation_after)}" r="${index === state.selectedPly ? 7 : keyLabels.has(move.classification) ? 4 : 7}"><title>${escapeHtml(move.played_san || move.san)} · ${escapeHtml(move.classification)} · ${formatEval(move.evaluation_after)}</title></circle>`).join("")}
+      <circle class="graph-selected-core" cx="${selectedX}" cy="${selectedY}" r="3"/>
+    </svg>
+    <footer class="graph-legend"><span><i class="classification-best"></i>Strong</span><span><i class="classification-inaccuracy"></i>Inaccuracy</span><span><i class="classification-mistake"></i>Mistake</span><span><i class="classification-blunder"></i>Blunder</span><small>Move number →</small></footer>
+  </div>`;
 }
 
 function inspectorMarkup(): string {
@@ -496,7 +541,7 @@ function inspectorMarkup(): string {
   if (state.inspectorTab === "graph") content = evaluationGraphMarkup();
   if (state.inspectorTab === "summary") {
     const analysis = state.game?.analysis;
-    const totals = classificationSummaryMarkup().replace("<details class=\"classification-summary\"><summary>Game classification summary</summary>", "<section class=\"classification-summary open\"><h3>Game classification summary</h3>").replace("</details>", "</section>");
+    const totals = classificationSummaryMarkup();
     content = `${totals}<div class="opening-facts"><span>Opening</span><strong>${escapeHtml([analysis?.eco, analysis?.opening].filter(Boolean).join(" · ") || "Unclassified")}</strong><span>Known book</span><strong>${analysis?.book_ply ?? 0} plies</strong><span>Departure</span><strong>${analysis?.departure_ply === null || analysis?.departure_ply === undefined ? "Stayed in reference" : `Ply ${analysis.departure_ply + 1}`}</strong></div>`;
   }
   if (state.inspectorTab === "method") content = `<div class="method-note"><h3>What these labels mean</h3><p>Positions are reconstructed from the imported PGN, scanned locally, then deeper candidates are verified with Stockfish. The interface exposes telemetry and evidence, not private reasoning.</p><dl><div><dt>Engine</dt><dd>${escapeHtml(move?.engine_version || "Stockfish local")}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(move?.classification_model_version || "Tutor Classification Model 1")}</dd></div><div><dt>Opening reference</dt><dd>${escapeHtml(move?.book_version || state.game?.analysis?.opening_book_version || "Not used for this move")}</dd></div><div><dt>Depth</dt><dd>${move?.depth || "—"}</dd></div></dl></div>`;

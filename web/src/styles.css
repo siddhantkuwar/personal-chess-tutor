@@ -570,7 +570,7 @@ body { font-family: var(--studio-sans); background: var(--studio-bg); }
 .board-with-eval .board-region { grid-area: auto; position: static; align-self: start; min-width: 0; }
 .evaluation-rail { display: flex; flex-direction: column; align-items: center; gap: 7px; min-height: 0; padding-block: 8px; color: var(--studio-muted); font: 10px/1 var(--studio-mono); }
 .eval-meter { position: relative; flex: 1; width: 13px; min-height: 260px; overflow: hidden; border: 1px solid var(--studio-line-strong); background: #070806; }
-.eval-meter i { position: absolute; inset: auto 0 0; display: block; background: #e8e6dd; transition: height .24s ease; }
+.eval-meter .eval-black { fill: #070806; }.eval-meter .eval-white { fill: #e8e6dd; }.eval-meter line { stroke: rgba(139,211,176,.75); stroke-width: .5; vector-effect: non-scaling-stroke; }
 .eval-score { writing-mode: vertical-rl; transform: rotate(180deg); color: var(--studio-text); }
 .eval-side { color: var(--studio-faint); writing-mode: vertical-rl; transform: rotate(180deg); }
 .review-stage .review-region { margin: 12px 0 0 42px; border: 1px solid var(--studio-line); }
@@ -679,4 +679,133 @@ body { font-family: var(--studio-sans); background: var(--studio-bg); }
   .rating-story strong { font-size: 48px; }
   .rating-story svg { height: 120px; }
   .quality-stats { grid-template-columns: 1fr; }
+}
+
+/* Phase 2.3 visual refinement — kinetic analysis + readable chess timeline. */
+.game-summary {
+  display: grid;
+  grid-template-columns: minmax(250px, .7fr) minmax(580px, 1.3fr);
+  align-items: center;
+  gap: 28px;
+  min-height: 104px;
+}
+.analysis-status {
+  position: relative;
+  display: grid;
+  grid-template-columns: 62px minmax(190px, .8fr) minmax(330px, 1.2fr);
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 13px 16px 17px;
+  overflow: hidden;
+  border: 1px solid var(--studio-line);
+  border-radius: 6px;
+  background: #151613;
+}
+.analysis-kinetic { position: relative; width: 52px; height: 52px; }
+.analysis-kinetic span { position: absolute; inset: 0; border: 1px solid rgba(139,211,176,.18); border-top-color: var(--studio-accent); border-radius: 50%; animation: analysis-orbit 3.6s cubic-bezier(.65,.05,.35,1) infinite; }
+.analysis-kinetic span:nth-child(2) { inset: 7px; border-color: rgba(139,211,176,.18); border-right-color: rgba(139,211,176,.9); animation-duration: 2.7s; animation-direction: reverse; }
+.analysis-kinetic span:nth-child(3) { inset: 15px; border-color: rgba(139,211,176,.16); border-bottom-color: var(--studio-accent); animation-duration: 2s; }
+.analysis-kinetic > i { position: absolute; inset: 21px; display: grid; place-items: center; border-radius: 50%; color: #0d1511; background: var(--studio-accent); box-shadow: 0 0 0 5px rgba(139,211,176,.07); font: 700 12px var(--studio-sans); animation: analysis-heartbeat 1.8s ease-in-out infinite; }
+@keyframes analysis-orbit { 50% { transform: rotate(170deg) scale(.92); opacity: .58; } to { transform: rotate(360deg); } }
+@keyframes analysis-heartbeat { 50% { transform: scale(1.35); box-shadow: 0 0 0 10px rgba(139,211,176,0); } }
+.analysis-copy { display: grid; gap: 3px; min-width: 0; }
+.analysis-copy small { color: var(--studio-accent); font: 500 9px/1.2 var(--studio-mono); letter-spacing: .08em; text-transform: uppercase; }
+.analysis-copy strong { overflow: hidden; color: var(--studio-text); font-size: 14px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+.analysis-copy > span { color: var(--studio-faint); font: 10px/1.4 var(--studio-mono); }
+.analysis-sequence { display: grid; grid-template-columns: repeat(3, 1fr); min-width: 0; }
+.analysis-sequence > div { position: relative; display: grid; justify-items: center; gap: 7px; color: var(--studio-faint); font-size: 9px; text-align: center; }
+.analysis-sequence > div::after { position: absolute; top: 11px; left: calc(50% + 15px); width: calc(100% - 30px); height: 1px; background: var(--studio-line); content: ""; }
+.analysis-sequence > div:last-child::after { display: none; }
+.analysis-sequence i { position: relative; z-index: 1; display: grid; place-items: center; width: 23px; height: 23px; border: 1px solid var(--studio-line-strong); border-radius: 50%; color: var(--studio-faint); background: #151613; font: normal 9px var(--studio-mono); }
+.analysis-sequence .done { color: var(--studio-muted); }
+.analysis-sequence .done i { color: #10130f; border-color: var(--studio-accent); background: var(--studio-accent); }
+.analysis-sequence .done::after { background: rgba(139,211,176,.42); }
+.analysis-sequence .active { color: var(--studio-text); }
+.analysis-sequence .active i { color: var(--studio-accent); border-color: var(--studio-accent); box-shadow: 0 0 0 5px rgba(139,211,176,.08); animation: analysis-stage 1.7s ease-in-out infinite; }
+@keyframes analysis-stage { 50% { box-shadow: 0 0 0 9px rgba(139,211,176,0); } }
+.analysis-beam { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; overflow: hidden; background: #20221e; }
+.analysis-beam svg { display: block; width: 100%; height: 3px; }.analysis-beam .beam-track { fill: #20221e; }.analysis-beam .beam-fill { fill: var(--studio-accent); }
+.analysis-status.is-complete { background: #141613; }
+.analysis-status.is-complete .analysis-kinetic span, .analysis-status.is-complete .analysis-kinetic > i { animation: none; }
+.analysis-status.is-complete .analysis-kinetic span { border-color: rgba(139,211,176,.2); }
+.analysis-status.is-complete .analysis-kinetic span:first-child { border-color: var(--studio-accent); }
+.analysis-status.is-complete .analysis-kinetic > i { inset: 15px; box-shadow: none; }
+
+.analysis-inspector { border-color: #343631; background: #151613; }
+.analysis-inspector > nav { gap: 22px; padding: 0 20px; background: #121310; }
+.analysis-inspector > nav button { position: relative; min-width: 0; padding: 17px 2px 15px; border-radius: 0; font-size: 12px; }
+.analysis-inspector > nav button::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; content: ""; }
+.analysis-inspector > nav button.active { color: var(--studio-text); background: transparent; }
+.analysis-inspector > nav button.active::after { background: var(--studio-accent); }
+.inspector-content { padding: 20px; }
+.graph-reading { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 14px; padding: 0 4px 16px; }
+.graph-reading > div { display: flex; align-items: baseline; gap: 10px; }
+.graph-reading small { color: var(--studio-muted); font: 500 12px var(--studio-mono); }
+.graph-reading strong { color: var(--studio-text); font: 500 28px/1 var(--studio-mono); letter-spacing: -.04em; }
+.graph-reading > span { display: inline-flex; align-items: center; gap: 7px; width: max-content; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--classification, var(--studio-line)) 38%, var(--studio-line)); border-radius: 4px; color: var(--studio-muted); font-size: 10px; }
+.graph-reading > span i { width: 7px; height: 7px; border-radius: 2px; background: var(--classification, var(--studio-faint)); }
+.graph-reading p { justify-self: end; max-width: 430px; margin: 0; color: var(--studio-faint); font-size: 11px; text-align: right; }
+.inspector-graph svg { display: block; width: 100%; height: auto; min-height: 230px; overflow: visible; }
+.inspector-graph .graph-grid { stroke: #30322d; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.inspector-graph .graph-grid.zero { stroke: #51544c; }
+.graph-y-label, .graph-x-label { fill: #70746b; font: 9px var(--studio-mono); }
+.graph-area { fill: url(#evaluation-area); }
+.graph-line { fill: none; stroke: var(--studio-accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.graph-classification { fill: var(--classification, var(--studio-faint)); opacity: .9; }
+.graph-selected-guide { stroke: rgba(242,241,234,.3); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.inspector-graph .graph-point { fill: transparent; stroke: transparent; cursor: pointer; vector-effect: non-scaling-stroke; }
+.inspector-graph .graph-point.key { fill: #151613; stroke: var(--classification, var(--studio-accent)); stroke-width: 2; }
+.inspector-graph .graph-point.selected { fill: var(--classification, var(--studio-accent)); stroke: #f2f1ea; stroke-width: 2; }
+.graph-selected-core { pointer-events: none; fill: #f2f1ea; }
+.graph-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 4px 0; border-top: 1px solid #292b27; color: var(--studio-faint); font-size: 9px; }
+.graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.graph-legend i { width: 14px; height: 3px; background: var(--classification, var(--studio-faint)); }
+.graph-legend small { margin-left: auto; color: var(--studio-faint); font: 9px var(--studio-mono); }
+.inspector-empty { padding: 34px; color: var(--studio-faint); text-align: center; }
+
+.classification-summary.open { padding: 2px 4px 8px; }
+.classification-summary.open > header { display: flex; align-items: end; justify-content: space-between; margin-bottom: 20px; }
+.classification-summary.open > header small { color: var(--studio-accent); font: 9px var(--studio-mono); letter-spacing: .08em; text-transform: uppercase; }
+.classification-summary.open > header h3 { margin: 4px 0 0; font-size: 20px; font-weight: 520; }
+.classification-summary.open > header > span { color: var(--studio-faint); font: 10px var(--studio-mono); }
+.summary-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
+.summary-sides > div { display: grid; gap: 8px; }
+.summary-sides strong { overflow: hidden; color: var(--studio-muted); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.summary-distribution { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 1px; height: 7px; overflow: hidden; border-radius: 2px; background: #252722; }
+.summary-distribution i { display: block; min-width: 2px; height: 100%; background: var(--classification, var(--studio-faint)); }
+.summary-table { display: grid; grid-template-columns: minmax(150px,1fr) 70px 70px; align-items: center; padding: 0; font-size: 11px; }
+.summary-table > * { min-height: 34px; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.summary-table > strong, .summary-heading { color: var(--studio-faint); font-size: 9px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; }
+.summary-table > strong, .summary-table b { text-align: center; }
+.summary-label { display: flex; align-items: center; gap: 9px; color: var(--studio-muted); }
+.summary-label i { width: 4px; height: 18px; border-radius: 1px; background: var(--classification, var(--studio-faint)); }
+.summary-table b { color: #5f625a; font: 500 12px var(--studio-mono); }
+.summary-table b.has-value { color: var(--studio-text); background: color-mix(in srgb, var(--classification, transparent) 7%, transparent); }
+
+.move::before { width: 4px; height: 21px; border-radius: 1px; }
+.move-label { color: var(--classification, var(--faint)); font-weight: 550; }
+.move.current { box-shadow: inset 4px 0 0 var(--classification, var(--studio-text)), inset 0 0 0 1px var(--line-strong); }
+
+@media (max-width: 1099px) {
+  .game-summary { grid-template-columns: 1fr; gap: 14px; }
+  .analysis-status { grid-template-columns: 58px minmax(170px,.75fr) minmax(300px,1.25fr); }
+}
+@media (max-width: 759px) {
+  .game-summary { min-height: 0; }
+  .analysis-status { grid-template-columns: 48px 1fr; padding: 12px 13px 16px; }
+  .analysis-kinetic { width: 42px; height: 42px; }
+  .analysis-kinetic span:nth-child(3) { inset: 12px; }
+  .analysis-kinetic > i { inset: 17px; }
+  .analysis-sequence { grid-column: 1 / -1; margin-top: 5px; }
+  .graph-reading { grid-template-columns: auto 1fr; }
+  .graph-reading p { grid-column: 1 / -1; justify-self: start; text-align: left; }
+  .inspector-graph svg { min-width: 680px; }
+  .inspector-graph { overflow-x: auto; }
+  .graph-legend { min-width: 680px; }
+  .summary-table { grid-template-columns: minmax(125px,1fr) 54px 54px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analysis-kinetic span, .analysis-kinetic > i, .analysis-sequence .active i { animation: none !important; }
 }
