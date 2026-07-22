@@ -50,7 +50,12 @@ TEST_CASE("phase two API completes the personal improvement loop end to end") {
         "POST", "/api/import", {}, json::dump(json::Value::Object{{"pgn", pgn}})});
     CHECK_EQ(imported.status, 202);
     const auto import_body = json::parse(imported.body);
-    const auto job_id = static_cast<std::uint64_t>(import_body.at("job").at("id").as_number());
+    CHECK(!import_body.as_object().contains("job"));
+    const std::string game_id = import_body.at("game_id").as_string();
+    const auto started = api.handle(
+        service::Request{"POST", "/api/games/" + game_id + "/analysis", {}, {}});
+    CHECK_EQ(started.status, 202);
+    const auto job_id = static_cast<std::uint64_t>(json::parse(started.body).at("id").as_number());
     for (int attempt = 0; attempt < 100; ++attempt) {
         const auto job = jobs.get(job_id);
         if (job && (job->status == app::JobStatus::Complete ||

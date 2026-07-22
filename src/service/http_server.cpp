@@ -66,6 +66,31 @@ std::string lowercase(std::string value) {
     return value;
 }
 
+bool valid_loopback_authority(std::string_view authority) {
+    constexpr std::array<std::string_view, 2> allowed = {"127.0.0.1", "localhost"};
+    for (const std::string_view host : allowed) {
+        if (authority == host)
+            return true;
+        if (!authority.starts_with(host) || authority.size() <= host.size() ||
+            authority[host.size()] != ':')
+            continue;
+        const std::string_view port = authority.substr(host.size() + 1);
+        if (port.empty() || port.size() > 5)
+            return false;
+        unsigned value = 0;
+        const auto parsed = std::from_chars(port.data(), port.data() + port.size(), value);
+        return parsed.ec == std::errc{} && parsed.ptr == port.data() + port.size() &&
+               value > 0 && value <= 65535;
+    }
+    return false;
+}
+
+bool valid_loopback_origin(std::string_view origin) {
+    constexpr std::string_view scheme = "http://";
+    return origin.starts_with(scheme) &&
+           valid_loopback_authority(origin.substr(scheme.size()));
+}
+
 std::string percent_decode(std::string_view value) {
     std::string result;
     result.reserve(value.size());
@@ -137,8 +162,50 @@ Response json_response(int status, json::Value value) {
         status, {{"Content-Type", "application/json; charset=utf-8"}}, json::dump(value)};
 }
 
+json::Value engine_result_json(const engine::AnalysisResult& result) {
+    json::Value::Array lines;
+    for (const auto& line : result.lines) {
+        json::Value::Array moves;
+        for (const auto& move : line.moves)
+            moves.emplace_back(move);
+        lines.emplace_back(json::Value::Object{
+            {"multipv", line.multipv},
+            {"depth", line.depth},
+            {"centipawns", line.centipawns ? json::Value(*line.centipawns) : json::Value{}},
+            {"mate", line.mate ? json::Value(*line.mate) : json::Value{}},
+            {"nodes", static_cast<double>(line.nodes)},
+            {"time_ms", static_cast<double>(line.time_ms)},
+            {"moves", std::move(moves)},
+        });
+    }
+    return json::Value::Object{{"best_move", result.best_move},
+                               {"ponder_move", result.ponder_move},
+                               {"lines", std::move(lines)}};
+}
+
 Response error_response(int status, std::string message) {
     return json_response(status, json::Value::Object{{"error", std::move(message)}});
+}
+
+std::string_view error_code(ErrorCode code) {
+    switch (code) {
+    case ErrorCode::InvalidArgument: return "invalid_argument";
+    case ErrorCode::ParseError: return "parse_error";
+    case ErrorCode::IllegalMove: return "illegal_move";
+    case ErrorCode::Unsupported: return "unsupported";
+    case ErrorCode::NotFound: return "not_found";
+    case ErrorCode::NetworkError: return "network_error";
+    case ErrorCode::Timeout: return "timeout";
+    case ErrorCode::EngineError: return "engine_error";
+    case ErrorCode::IoError: return "io_error";
+    case ErrorCode::Corruption: return "corruption";
+    }
+    return "unknown";
+}
+
+Response error_response(int status, std::string message, ErrorCode code) {
+    return json_response(status, json::Value::Object{{"error", std::move(message)},
+                                                      {"code", std::string(error_code(code))}});
 }
 
 Response ingest_error(int status, std::string message, std::string code,
@@ -666,13 +733,11 @@ Response Api::handle(const Request& request) {
                 throw Error(ErrorCode::InvalidArgument, "request requires url or pgn");
             }
             const app::AddResult added = repository_.add(imported);
-            const app::AnalysisJob job = jobs_.start(imported.game.identity);
             return json_response(added == app::AddResult::Added ? 202 : 200,
                                  json::Value::Object{
                                      {"status", "imported"},
                                      {"duplicate", added == app::AddResult::Duplicate},
                                      {"game_id", imported.game.identity},
-                                     {"job", app::to_json(job)},
                                  });
         }
         if (parts == std::vector<std::string>{"api", "import", "resolve"} &&
@@ -790,6 +855,82 @@ Response Api::handle(const Request& request) {
                     return json_response(202, json::Value::Object{{"status", "pending"}});
                 return json_response(200, app::to_json(*game->analysis));
             }
+            if (parts.size() == 4 && parts[3] == "retry-attempts" &&
+                request.method == "GET") {
+                json::Value::Array attempts;
+                for (const auto& attempt : repository_.review_attempts(parts[2]))
+                    attempts.emplace_back(app::to_json(attempt));
+                return json_response(200,
+                                     json::Value::Object{{"attempts", std::move(attempts)}});
+            }
+            if (parts.size() == 6 && parts[3] == "moves" && parts[5] == "retry" &&
+                request.method == "POST") {
+                const std::size_t ply = static_cast<std::size_t>(parse_id(parts[4]));
+                const json::Value body = json::parse(request.body);
+                return json_response(201, app::to_json(repository_.record_review_attempt(
+                                              parts[2], ply, body.at("uci").as_string())));
+            }
+            if (parts.size() == 4 && parts[3] == "variations") {
+                if (request.method == "POST") {
+                    const json::Value body = json::parse(request.body);
+                    const auto variation = repository_.create_variation(
+                        parts[2], body.at("root_ply").as_size(),
+                        body.get("root_position", "after").as_string());
+                    return json_response(201, app::to_json(variation));
+                }
+                if (request.method == "GET") {
+                    json::Value::Array variations;
+                    for (const auto& variation : repository_.variations(parts[2]))
+                        variations.emplace_back(app::to_json(variation));
+                    return json_response(200, json::Value::Object{
+                                                  {"variations", std::move(variations)}});
+                }
+            }
+            if (parts.size() == 5 && parts[3] == "variations") {
+                const auto variation = repository_.variation(parts[4]);
+                if (!variation || variation->game_id != parts[2])
+                    throw Error(ErrorCode::NotFound, "variation does not exist");
+                if (request.method == "GET")
+                    return json_response(200, app::to_json(*variation));
+                if (request.method == "DELETE") {
+                    static_cast<void>(repository_.delete_variation(parts[4]));
+                    return json_response(200, json::Value::Object{{"deleted", true},
+                                                                   {"id", parts[4]}});
+                }
+            }
+            if (parts.size() == 6 && parts[3] == "variations" &&
+                request.method == "POST") {
+                const auto variation = repository_.variation(parts[4]);
+                if (!variation || variation->game_id != parts[2])
+                    throw Error(ErrorCode::NotFound, "variation does not exist");
+                if (parts[5] == "moves") {
+                    const json::Value body = json::parse(request.body);
+                    return json_response(200, app::to_json(repository_.extend_variation(
+                                                  parts[4],
+                                                  static_cast<std::uint64_t>(
+                                                      body.at("node_id").as_number()),
+                                                  body.at("uci").as_string())));
+                }
+                if (parts[5] == "cursor") {
+                    const json::Value body = json::parse(request.body);
+                    return json_response(200, app::to_json(repository_.set_variation_cursor(
+                                                  parts[4],
+                                                  static_cast<std::uint64_t>(
+                                                      body.at("node_id").as_number()))));
+                }
+                if (parts[5] == "reset")
+                    return json_response(200,
+                                         app::to_json(repository_.reset_variation(parts[4])));
+                if (parts[5] == "analysis") {
+                    const auto current = variation->nodes.find(variation->current_node_id);
+                    if (current == variation->nodes.end())
+                        throw Error(ErrorCode::Corruption,
+                                    "variation cursor does not reference a node");
+                    return json_response(
+                        200, engine_result_json(jobs_.analyze_variation_position(
+                                 current->second.fen)));
+                }
+            }
             if (parts.size() == 5 && parts[3] == "moves" && request.method == "GET") {
                 const std::size_t ply = static_cast<std::size_t>(parse_id(parts[4]));
                 if (ply >= game->imported.game.plies.size()) {
@@ -842,7 +983,7 @@ Response Api::handle(const Request& request) {
             request.path.starts_with("/api/import/resolve") ||
             request.path.starts_with("/api/import/resolutions/"))
             return ingest_error(status_for(error.code()), error.what(), "invalid_request");
-        return error_response(status_for(error.code()), error.what());
+        return error_response(status_for(error.code()), error.what(), error.code());
     } catch (const std::exception& error) {
         log(LogLevel::Error, "api", error.what());
         return error_response(500, "internal server error");
@@ -956,6 +1097,16 @@ void HttpServer::handle_client(int client_fd) {
             close(client_fd);
             return;
         }
+        const auto host = request->headers.find("host");
+        const auto origin = request->headers.find("origin");
+        if ((host != request->headers.end() && !valid_loopback_authority(host->second)) ||
+            (origin != request->headers.end() && !valid_loopback_origin(origin->second))) {
+            constexpr std::string_view forbidden =
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            static_cast<void>(send_all(client_fd, forbidden.data(), forbidden.size()));
+            close(client_fd);
+            return;
+        }
         const auto upgrade = request->headers.find("upgrade");
         if (request->path == "/ws" && upgrade != request->headers.end() &&
             lowercase(upgrade->second) == "websocket") {
@@ -967,8 +1118,14 @@ void HttpServer::handle_client(int client_fd) {
         response.headers.insert_or_assign("Content-Length", std::to_string(response.body.size()));
         response.headers.insert_or_assign("Connection", "close");
         response.headers.insert_or_assign("X-Content-Type-Options", "nosniff");
+        response.headers.insert_or_assign("X-Frame-Options", "DENY");
+        response.headers.insert_or_assign("Referrer-Policy", "no-referrer");
         response.headers.insert_or_assign(
-            "Content-Security-Policy", "default-src 'self'; connect-src 'self' ws://127.0.0.1:*");
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+        response.headers.insert_or_assign(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'; "
+            "frame-ancestors 'none'; connect-src 'self' ws://127.0.0.1:*");
         std::ostringstream head;
         head << "HTTP/1.1 " << response.status << ' ' << reason_phrase(response.status) << "\r\n";
         for (const auto& [key, value] : response.headers)
@@ -1068,23 +1225,7 @@ void HttpServer::broadcast(std::string_view message) {
 }
 
 bool HttpServer::valid_websocket_origin(std::string_view origin) {
-    constexpr std::array<std::string_view, 2> allowed = {
-        "http://127.0.0.1", "http://localhost"};
-    for (const auto prefix : allowed) {
-        if (origin == prefix)
-            return true;
-        if (!origin.starts_with(prefix) || origin.size() <= prefix.size() ||
-            origin[prefix.size()] != ':')
-            continue;
-        const std::string_view port = origin.substr(prefix.size() + 1);
-        if (port.empty() || port.size() > 5)
-            return false;
-        unsigned value = 0;
-        const auto parsed = std::from_chars(port.data(), port.data() + port.size(), value);
-        return parsed.ec == std::errc{} && parsed.ptr == port.data() + port.size() &&
-               value > 0 && value <= 65535;
-    }
-    return false;
+    return valid_loopback_origin(origin);
 }
 
 Response HttpServer::static_file(std::string_view request_path) const {

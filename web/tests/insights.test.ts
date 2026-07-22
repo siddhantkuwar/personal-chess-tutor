@@ -17,7 +17,7 @@ const move = (ply: number, phase: string, tags: string[], loss = 0): MoveAssessm
 const stored = (date: string, rating: string, moves: MoveAssessment[]): StoredGame => ({
   game: { id: date, tags: { White: "Alex", Black: "Rival", WhiteElo: rating, BlackElo: "1400", UTCDate: date, Result: "1-0" }, plies: [] },
   source_url: "", import_method: "manual", analysis_status: "complete",
-  analysis: { game_id: date, moves, mistakes: [], eco: "C20", opening: "King's Pawn Game", book_ply: 2, departure_ply: 2, opening_book_version: "2026.1" },
+  analysis: { game_id: date, moves, mistakes: [], eco: "C20", opening: "King's Pawn Game", book_ply: 2, departure_ply: 2, opening_book_version: "2026.1", accuracy: 92, white_accuracy: 94, black_accuracy: 90, accuracy_sample_size: moves.length, accuracy_version: "tutor-expected-points-squared-v1" },
 });
 
 const games = [stored("2026.07.01", "1400", [move(0, "opening", []), move(1, "middlegame", ["fork"]), move(2, "endgame", [], .3)]), stored("2026.07.15", "1432", [move(0, "opening", [])])];

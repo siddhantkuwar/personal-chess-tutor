@@ -12,6 +12,37 @@
 namespace pct::analysis {
 namespace {
 
+void calculate_accuracy(GameAnalysis& analysis) {
+    double total = 0.0;
+    double white = 0.0;
+    double black = 0.0;
+    std::size_t white_count = 0;
+    std::size_t black_count = 0;
+    for (const auto& move : analysis.moves) {
+        const double loss = std::clamp(move.expected_points_loss, 0.0, 1.0);
+        const double score = move.quality == MoveQuality::Book
+                                 ? 100.0
+                                 : 100.0 * (1.0 - loss) * (1.0 - loss);
+        total += score;
+        if (move.side == "white") {
+            white += score;
+            ++white_count;
+        } else {
+            black += score;
+            ++black_count;
+        }
+    }
+    analysis.accuracy_sample_size = analysis.moves.size();
+    analysis.accuracy = analysis.moves.empty()
+                            ? 0.0
+                            : total / static_cast<double>(analysis.moves.size());
+    analysis.white_accuracy =
+        white_count == 0 ? 0.0 : white / static_cast<double>(white_count);
+    analysis.black_accuracy =
+        black_count == 0 ? 0.0 : black / static_cast<double>(black_count);
+    analysis.accuracy_version = std::string(accuracy_model_version);
+}
+
 int piece_value(chess::PieceType type) {
     switch (type) {
     case chess::PieceType::Pawn:
@@ -573,6 +604,16 @@ std::size_t AnalysisCache::eviction_count() const {
 Analyzer::Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, AnalyzerOptions options)
     : engine_(engine), cache_(cache), options_(options) {}
 
+engine::AnalysisResult Analyzer::analyze_position(std::string_view fen,
+                                                  CancellationToken stop_token,
+                                                  engine::AnalysisPriority priority) {
+    const chess::Board board = chess::Board::from_fen(fen);
+    engine::AnalysisRequest request{board.to_fen(), options_.deep_depth,
+                                    std::chrono::milliseconds(0), 3};
+    request.priority = priority;
+    return analyze_cached(request, stop_token);
+}
+
 engine::AnalysisResult Analyzer::analyze_cached(const engine::AnalysisRequest& request,
                                                 CancellationToken stop_token) {
     engine::AnalysisResult result;
@@ -668,6 +709,7 @@ GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback
         analysis.moves.push_back(std::move(assessment));
         report(AnalysisStage::ShallowScan, index + 1, game.plies.size(), "Scanning positions");
     }
+    calculate_accuracy(analysis);
     return analysis;
 }
 
@@ -834,6 +876,7 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
                 "shallow result finalized because no focused-verification trigger was present");
         }
     }
+    calculate_accuracy(analysis);
     report(AnalysisStage::Complete, 1, 1, "Analysis complete");
     return analysis;
 }

@@ -20,20 +20,6 @@ export function classificationCounts(moves: MoveAssessment[], side: "white" | "b
   return counts;
 }
 
-export function acceptableMoves(move: MoveAssessment | undefined): string[] {
-  if (!move) return [];
-  return Array.from(new Set([move.best_uci, ...move.acceptable_alternatives].filter(Boolean)));
-}
-
-export function isAcceptedTry(move: MoveAssessment | undefined, uci: string): boolean {
-  return acceptableMoves(move).includes(uci.trim().toLowerCase());
-}
-
-export function acceptedSquareMove(move: MoveAssessment | undefined, source: string, destination: string): string | null {
-  const prefix = `${source}${destination}`.toLowerCase();
-  return acceptableMoves(move).find((candidate) => candidate.startsWith(prefix)) ?? null;
-}
-
 export function isKeyMove(move: MoveAssessment | undefined): boolean {
   return Boolean(move && (blockingClassifications.has(move.classification) || positiveClassifications.has(move.classification)));
 }

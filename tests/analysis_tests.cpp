@@ -88,6 +88,14 @@ TEST_CASE("analysis identifies a hanging queen with evidence") {
         CHECK(move.expected_points_loss <= 1.0);
     }
     CHECK(!result.mistakes.empty());
+    CHECK_EQ(result.accuracy_sample_size, game.plies.size());
+    CHECK(result.accuracy >= 0.0);
+    CHECK(result.accuracy <= 100.0);
+    CHECK(result.white_accuracy >= 0.0);
+    CHECK(result.white_accuracy <= 100.0);
+    CHECK(result.black_accuracy >= 0.0);
+    CHECK(result.black_accuracy <= 100.0);
+    CHECK_EQ(result.accuracy_version, std::string(analysis::accuracy_model_version));
     CHECK_EQ(result.mistakes.front().category, "Hanging queen");
     CHECK(result.mistakes.front().loss >= 700);
     CHECK(!result.mistakes.front().punishment.empty());

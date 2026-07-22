@@ -52,6 +52,10 @@ TEST_CASE("repository deduplicates imports and replays completed analysis") {
         CHECK(repository.add(imported) == app::AddResult::Duplicate);
         analysis::GameAnalysis completed;
         completed.game_id = parsed.identity;
+        completed.accuracy = 87.5;
+        completed.white_accuracy = 91.0;
+        completed.black_accuracy = 84.0;
+        completed.accuracy_sample_size = 4;
         repository.save_analysis(completed);
         CHECK(repository.get(parsed.identity)->analysis.has_value());
         CHECK(std::filesystem::exists(path.parent_path() / "games.idx"));
@@ -71,7 +75,49 @@ TEST_CASE("repository deduplicates imports and replays completed analysis") {
         const auto restored = repository.get(parsed.identity);
         CHECK(restored.has_value());
         CHECK(restored->analysis.has_value());
+        CHECK_EQ(restored->analysis->accuracy, 87.5);
+        CHECK_EQ(restored->analysis->accuracy_sample_size, 4ULL);
         CHECK_EQ(restored->imported.game.plies.size(), 4ULL);
+    }
+    remove_repository_files(path);
+}
+
+TEST_CASE("repository persists variation trees and deletion tombstones") {
+    const auto path = repository_path();
+    remove_repository_files(path);
+    const chess::Game parsed = chess::parse_pgn(pgn);
+    const import::ImportedGame imported{
+        parsed, {}, std::string(pgn), import::ImportMethod::ManualPgn};
+    std::string variation_id;
+    {
+        storage::EventLog log(path);
+        app::Repository repository(log);
+        CHECK(repository.add(imported) == app::AddResult::Added);
+        const auto created = repository.create_variation(parsed.identity, 0, "after");
+        variation_id = created.id;
+        const auto first = repository.extend_variation(variation_id, 0, "e7e5");
+        CHECK_EQ(first.nodes.size(), 2ULL);
+        const auto reset = repository.reset_variation(variation_id);
+        CHECK_EQ(reset.current_node_id, 0ULL);
+        const auto branched = repository.extend_variation(variation_id, 0, "c7c5");
+        CHECK_EQ(branched.nodes.at(0).children.size(), 2ULL);
+        CHECK(std::filesystem::exists(repository.create_snapshot()));
+        CHECK(repository.compact_storage() > 0);
+    }
+    {
+        storage::EventLog log(path);
+        app::Repository repository(log);
+        const auto restored = repository.variation(variation_id);
+        CHECK(restored.has_value());
+        CHECK_EQ(restored->game_id, parsed.identity);
+        CHECK_EQ(restored->nodes.size(), 3ULL);
+        CHECK_EQ(restored->nodes.at(0).children.size(), 2ULL);
+        CHECK(repository.delete_variation(variation_id));
+    }
+    {
+        storage::EventLog log(path);
+        app::Repository repository(log);
+        CHECK(!repository.variation(variation_id).has_value());
     }
     remove_repository_files(path);
 }
@@ -120,6 +166,11 @@ TEST_CASE("repository round trips the Phase 2.1 per-ply classification contract"
         move.engine_version = "stockfish-test";
         completed.moves.push_back(move);
         repository.save_analysis(completed);
+        const auto attempt = repository.record_review_attempt(parsed.identity, 0, "d2d4");
+        CHECK(attempt.accepted);
+        CHECK_EQ(attempt.uci, "d2d4");
+        CHECK(std::filesystem::exists(repository.create_snapshot()));
+        CHECK(repository.compact_storage() > 0);
     }
     {
         storage::EventLog log(path);
@@ -139,6 +190,10 @@ TEST_CASE("repository round trips the Phase 2.1 per-ply classification contract"
         CHECK_EQ(move.engine_version, "stockfish-test");
         CHECK_EQ(move.classification_model_version,
                  std::string(analysis::classification_model_version));
+        const auto attempts = repository.review_attempts(parsed.identity);
+        CHECK_EQ(attempts.size(), 1ULL);
+        CHECK(attempts.front().accepted);
+        CHECK_EQ(attempts.front().uci, "d2d4");
     }
     remove_repository_files(path);
 }

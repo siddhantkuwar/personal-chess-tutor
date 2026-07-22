@@ -2,6 +2,7 @@
 
 #include "pct/common/error.hpp"
 #include "pct/common/log.hpp"
+#include "pct/chess/san.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -41,7 +42,7 @@ import::ImportMethod parse_method(std::string_view method) {
 }
 
 std::optional<chess::Move> parse_uci(chess::Board& board, std::string_view uci) {
-    if (uci.size() < 4)
+    if (uci.size() != 4 && uci.size() != 5)
         return std::nullopt;
     chess::PieceType promotion = chess::PieceType::Queen;
     if (uci.size() >= 5 && uci[4] == 'n') promotion = chess::PieceType::Knight;
@@ -53,6 +54,35 @@ std::optional<chess::Move> parse_uci(chess::Board& board, std::string_view uci) 
     } catch (const Error&) {
         return std::nullopt;
     }
+}
+
+Variation variation_from_json(const json::Value& value) {
+    Variation variation;
+    variation.id = value.at("id").as_string();
+    variation.game_id = value.at("game_id").as_string();
+    variation.root_ply = value.at("root_ply").as_size();
+    variation.root_position = value.at("root_position").as_string();
+    variation.root_fen = value.at("root_fen").as_string();
+    variation.current_node_id = static_cast<std::uint64_t>(value.at("current_node_id").as_number());
+    variation.next_node_id = static_cast<std::uint64_t>(value.at("next_node_id").as_number());
+    variation.engine_configuration = value.at("engine_configuration").as_string();
+    variation.updated_at_ms = static_cast<std::int64_t>(value.at("updated_at_ms").as_number());
+    for (const auto& encoded : value.at("nodes").as_array()) {
+        VariationNode node;
+        node.id = static_cast<std::uint64_t>(encoded.at("id").as_number());
+        node.parent_id = static_cast<std::int64_t>(encoded.at("parent_id").as_number());
+        node.uci = encoded.at("uci").as_string();
+        node.san = encoded.at("san").as_string();
+        node.fen = encoded.at("fen").as_string();
+        for (const auto& child : encoded.at("children").as_array())
+            node.children.push_back(static_cast<std::uint64_t>(child.as_number()));
+        variation.nodes.emplace(node.id, std::move(node));
+    }
+    if (variation.id.empty() || variation.game_id.empty() || variation.nodes.empty() ||
+        !variation.nodes.contains(0) || !variation.nodes.contains(variation.current_node_id))
+        throw Error(ErrorCode::Corruption, "persisted variation is incomplete");
+    static_cast<void>(chess::Board::from_fen(variation.root_fen));
+    return variation;
 }
 
 std::string piece_name(chess::PieceType type) {
@@ -803,7 +833,10 @@ void Repository::replay() {
         }
     }
     for (const storage::Event& event : events.events) {
-        if (event.id <= snapshot_event_id)
+        if (event.id <= snapshot_event_id &&
+            event.type != storage::EventType::VariationSaved &&
+            event.type != storage::EventType::VariationDeleted &&
+            event.type != storage::EventType::ReviewAttempted)
             continue;
         try {
             const json::Value payload = json::parse(event.payload);
@@ -885,6 +918,31 @@ void Repository::replay() {
                     checkpoint.username + "\n" + checkpoint.month, std::move(checkpoint));
             } else if (event.type == storage::EventType::ChessComSyncStateChanged) {
                 chesscom_sync_state_ = sync_state_from_json(payload);
+            } else if (event.type == storage::EventType::VariationSaved) {
+                Variation variation = variation_from_json(payload);
+                if (variation.id.starts_with("variation-")) {
+                    try {
+                        next_variation_id_ = std::max(
+                            next_variation_id_,
+                            static_cast<std::uint64_t>(std::stoull(variation.id.substr(10))) + 1);
+                    } catch (const std::exception&) {
+                        // Non-sequential imported identifiers remain valid and do not affect allocation.
+                    }
+                }
+                variations_.insert_or_assign(variation.id, std::move(variation));
+            } else if (event.type == storage::EventType::VariationDeleted) {
+                variations_.erase(payload.at("id").as_string());
+            } else if (event.type == storage::EventType::ReviewAttempted) {
+                ReviewAttempt attempt;
+                attempt.id = static_cast<std::uint64_t>(payload.at("id").as_number());
+                attempt.game_id = payload.at("game_id").as_string();
+                attempt.ply = payload.at("ply").as_size();
+                attempt.uci = payload.at("uci").as_string();
+                attempt.accepted = payload.at("accepted").as_bool();
+                attempt.attempted_at_ms = static_cast<std::int64_t>(
+                    payload.at("attempted_at_ms").as_number());
+                next_review_attempt_id_ = std::max(next_review_attempt_id_, attempt.id + 1);
+                review_attempts_.push_back(std::move(attempt));
             }
         } catch (const Error& error) {
             log(LogLevel::Warning, "repository",
@@ -1969,6 +2027,177 @@ ChessComSyncState Repository::chesscom_sync_state() const {
     return chesscom_sync_state_;
 }
 
+Variation Repository::create_variation(std::string_view game_id, std::size_t root_ply,
+                                       std::string root_position) {
+    std::lock_guard lock(mutex_);
+    const auto game = games_.find(std::string(game_id));
+    if (game == games_.end())
+        throw Error(ErrorCode::NotFound, "game does not exist");
+    if (root_ply >= game->second.imported.game.plies.size())
+        throw Error(ErrorCode::InvalidArgument, "variation root ply is outside the game");
+    if (root_position != "before" && root_position != "after")
+        throw Error(ErrorCode::InvalidArgument, "variation root position must be before or after");
+    const auto& ply = game->second.imported.game.plies[root_ply];
+    Variation variation;
+    variation.id = "variation-" + std::to_string(next_variation_id_++);
+    variation.game_id = std::string(game_id);
+    variation.root_ply = root_ply;
+    variation.root_position = std::move(root_position);
+    variation.root_fen = variation.root_position == "before" ? ply.fen_before : ply.fen_after;
+    variation.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    variation.nodes.emplace(0, VariationNode{0, -1, {}, {}, variation.root_fen, {}});
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(variation)));
+    variations_.emplace(variation.id, variation);
+    note_applied_event(event);
+    return variation;
+}
+
+Variation Repository::extend_variation(std::string_view variation_id, std::uint64_t node_id,
+                                       std::string_view move_uci) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        throw Error(ErrorCode::NotFound, "variation does not exist");
+    Variation updated = found->second;
+    const auto parent = updated.nodes.find(node_id);
+    if (parent == updated.nodes.end())
+        throw Error(ErrorCode::NotFound, "variation node does not exist");
+    chess::Board board = chess::Board::from_fen(parent->second.fen);
+    const auto move = parse_uci(board, move_uci);
+    if (!move)
+        throw Error(ErrorCode::IllegalMove, "move is not legal in the variation position");
+    const std::string canonical_uci = chess::uci(*move);
+    for (const std::uint64_t child_id : parent->second.children) {
+        const auto child = updated.nodes.find(child_id);
+        if (child != updated.nodes.end() && child->second.uci == canonical_uci) {
+            updated.current_node_id = child_id;
+            updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::system_clock::now().time_since_epoch())
+                                        .count();
+            const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                                     json::dump(to_json(updated)));
+            found->second = updated;
+            note_applied_event(event);
+            return updated;
+        }
+    }
+    const std::string san = chess::to_san(board, *move);
+    board.make_move(*move);
+    const std::uint64_t child_id = updated.next_node_id++;
+    updated.nodes.emplace(child_id, VariationNode{child_id, static_cast<std::int64_t>(node_id),
+                                                   canonical_uci, san, board.to_fen(), {}});
+    updated.nodes.at(node_id).children.push_back(child_id);
+    updated.current_node_id = child_id;
+    updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(updated)));
+    found->second = updated;
+    note_applied_event(event);
+    return updated;
+}
+
+Variation Repository::set_variation_cursor(std::string_view variation_id,
+                                           std::uint64_t node_id) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        throw Error(ErrorCode::NotFound, "variation does not exist");
+    if (!found->second.nodes.contains(node_id))
+        throw Error(ErrorCode::NotFound, "variation node does not exist");
+    Variation updated = found->second;
+    updated.current_node_id = node_id;
+    updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(updated)));
+    found->second = updated;
+    note_applied_event(event);
+    return updated;
+}
+
+Variation Repository::reset_variation(std::string_view variation_id) {
+    return set_variation_cursor(variation_id, 0);
+}
+
+std::optional<Variation> Repository::variation(std::string_view variation_id) const {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    return found == variations_.end() ? std::nullopt : std::optional<Variation>{found->second};
+}
+
+std::vector<Variation> Repository::variations(std::string_view game_id) const {
+    std::lock_guard lock(mutex_);
+    std::vector<Variation> result;
+    for (const auto& [_, variation] : variations_)
+        if (variation.game_id == game_id)
+            result.push_back(variation);
+    return result;
+}
+
+bool Repository::delete_variation(std::string_view variation_id) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        return false;
+    const storage::Event event = log_.append(
+        storage::EventType::VariationDeleted,
+        json::dump(json::Value::Object{{"id", std::string(variation_id)},
+                                       {"game_id", found->second.game_id}}));
+    variations_.erase(found);
+    note_applied_event(event);
+    return true;
+}
+
+ReviewAttempt Repository::record_review_attempt(std::string_view game_id, std::size_t ply,
+                                                 std::string_view uci) {
+    std::lock_guard lock(mutex_);
+    const auto game = games_.find(std::string(game_id));
+    if (game == games_.end())
+        throw Error(ErrorCode::NotFound, "game does not exist");
+    if (!game->second.analysis || ply >= game->second.analysis->moves.size() ||
+        ply >= game->second.imported.game.plies.size())
+        throw Error(ErrorCode::InvalidArgument, "review attempt requires an analyzed move");
+    chess::Board board = chess::Board::from_fen(game->second.imported.game.plies[ply].fen_before);
+    const auto move = parse_uci(board, uci);
+    if (!move)
+        throw Error(ErrorCode::IllegalMove, "move is not legal in the retry position");
+    const std::string canonical = chess::uci(*move);
+    const auto& assessment = game->second.analysis->moves[ply];
+    const bool accepted = canonical == assessment.best_uci ||
+                          std::find(assessment.acceptable_alternatives.begin(),
+                                    assessment.acceptable_alternatives.end(), canonical) !=
+                              assessment.acceptable_alternatives.end();
+    ReviewAttempt attempt;
+    attempt.id = next_review_attempt_id_++;
+    attempt.game_id = std::string(game_id);
+    attempt.ply = ply;
+    attempt.uci = canonical;
+    attempt.accepted = accepted;
+    attempt.attempted_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    const storage::Event event = log_.append(storage::EventType::ReviewAttempted,
+                                             json::dump(to_json(attempt)));
+    review_attempts_.push_back(attempt);
+    note_applied_event(event);
+    return attempt;
+}
+
+std::vector<ReviewAttempt> Repository::review_attempts(std::string_view game_id) const {
+    std::lock_guard lock(mutex_);
+    std::vector<ReviewAttempt> result;
+    for (const auto& attempt : review_attempts_)
+        if (attempt.game_id == game_id)
+            result.push_back(attempt);
+    return result;
+}
+
 void Repository::rebuild_indexes() const {
     json::Value::Array games;
     json::Value::Array positions;
@@ -2107,6 +2336,46 @@ void Repository::rebuild_indexes() const {
                                     {"entries", std::move(chesscom_archive)}});
 }
 
+json::Value to_json(const Variation& variation) {
+    json::Value::Array nodes;
+    for (const auto& [_, node] : variation.nodes) {
+        json::Value::Array children;
+        for (const std::uint64_t child : node.children)
+            children.emplace_back(static_cast<std::size_t>(child));
+        nodes.emplace_back(json::Value::Object{
+            {"id", static_cast<std::size_t>(node.id)},
+            {"parent_id", static_cast<double>(node.parent_id)},
+            {"uci", node.uci},
+            {"san", node.san},
+            {"fen", node.fen},
+            {"children", std::move(children)},
+        });
+    }
+    return json::Value::Object{
+        {"id", variation.id},
+        {"game_id", variation.game_id},
+        {"root_ply", variation.root_ply},
+        {"root_position", variation.root_position},
+        {"root_fen", variation.root_fen},
+        {"current_node_id", static_cast<std::size_t>(variation.current_node_id)},
+        {"next_node_id", static_cast<std::size_t>(variation.next_node_id)},
+        {"engine_configuration", variation.engine_configuration},
+        {"updated_at_ms", static_cast<double>(variation.updated_at_ms)},
+        {"nodes", std::move(nodes)},
+    };
+}
+
+json::Value to_json(const ReviewAttempt& attempt) {
+    return json::Value::Object{
+        {"id", static_cast<std::size_t>(attempt.id)},
+        {"game_id", attempt.game_id},
+        {"ply", attempt.ply},
+        {"uci", attempt.uci},
+        {"accepted", attempt.accepted},
+        {"attempted_at_ms", static_cast<double>(attempt.attempted_at_ms)},
+    };
+}
+
 json::Value to_json(const chess::Game& game) {
     json::Value::Array plies;
     for (std::size_t index = 0; index < game.plies.size(); ++index) {
@@ -2150,6 +2419,11 @@ json::Value to_json(const analysis::GameAnalysis& analysis) {
         {"departure_ply", analysis.departure_ply ? json::Value(*analysis.departure_ply)
                                                    : json::Value{}},
         {"opening_book_version", analysis.opening_book_version},
+        {"accuracy", analysis.accuracy},
+        {"white_accuracy", analysis.white_accuracy},
+        {"black_accuracy", analysis.black_accuracy},
+        {"accuracy_sample_size", analysis.accuracy_sample_size},
+        {"accuracy_version", analysis.accuracy_version},
     };
 }
 
@@ -2192,6 +2466,11 @@ analysis::GameAnalysis analysis_from_json(const json::Value& value) {
         result.departure_ply = departure.as_size();
     result.opening_book_version =
         value.get("opening_book_version", "legacy").as_string();
+    result.accuracy = value.get("accuracy", 0.0).as_number();
+    result.white_accuracy = value.get("white_accuracy", 0.0).as_number();
+    result.black_accuracy = value.get("black_accuracy", 0.0).as_number();
+    result.accuracy_sample_size = value.get("accuracy_sample_size", 0).as_size();
+    result.accuracy_version = value.get("accuracy_version", "legacy").as_string();
     return result;
 }
 

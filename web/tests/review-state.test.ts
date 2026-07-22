@@ -1,4 +1,4 @@
-import { acceptedSquareMove, autoplayDelay, clampPly, classificationCounts, completePlaybackDwell, firstReviewPly, isAcceptedTry, startPlayback } from "../src/review";
+import { autoplayDelay, clampPly, classificationCounts, completePlaybackDwell, firstReviewPly, startPlayback } from "../src/review";
 import type { MoveAssessment } from "../src/types";
 
 function assert(actual: unknown, expected: unknown, label: string): void {
@@ -69,8 +69,6 @@ assert(startPlayback("paused_key_move", 0, criticalRun).selectedPly, 1, "mistake
 assert(completePlaybackDwell("transitioning_from_key_move", 1, criticalRun).mode, "paused_key_move", "miss receives its own pause");
 assert(startPlayback("paused_key_move", 1, criticalRun).selectedPly, 2, "miss continue selects adjacent blunder");
 assert(completePlaybackDwell("transitioning_from_key_move", 2, criticalRun).mode, "paused_key_move", "blunder receives its own pause");
-assert(isAcceptedTry(move({ best_uci: "e2e4", acceptable_alternatives: ["d2d4"] }), "d2d4"), true, "equivalent candidate accepted");
-assert(acceptedSquareMove(move({ best_uci: "e7e8q" }), "e7", "e8"), "e7e8q", "board selection accepts promotion candidate");
 assert(classificationCounts([
   move({ side: "white", classification: "Best" }),
   move({ side: "black", classification: "Mistake" }),

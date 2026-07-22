@@ -25,6 +25,39 @@ struct StoredGame {
     std::optional<analysis::GameAnalysis> shallow_analysis;
 };
 
+struct VariationNode {
+    std::uint64_t id{0};
+    std::int64_t parent_id{-1};
+    std::string uci;
+    std::string san;
+    std::string fen;
+    std::vector<std::uint64_t> children;
+    bool operator==(const VariationNode&) const = default;
+};
+
+struct Variation {
+    std::string id;
+    std::string game_id;
+    std::size_t root_ply{0};
+    std::string root_position{"after"};
+    std::string root_fen;
+    std::uint64_t current_node_id{0};
+    std::uint64_t next_node_id{1};
+    std::string engine_configuration{"current-default"};
+    std::int64_t updated_at_ms{0};
+    std::map<std::uint64_t, VariationNode> nodes;
+    bool operator==(const Variation&) const = default;
+};
+
+struct ReviewAttempt {
+    std::uint64_t id{0};
+    std::string game_id;
+    std::size_t ply{0};
+    std::string uci;
+    bool accepted{false};
+    std::int64_t attempted_at_ms{0};
+};
+
 enum class AddResult { Added, Duplicate };
 
 struct BulkAddResult {
@@ -162,6 +195,21 @@ class Repository {
     chesscom_month_checkpoints(std::string_view username = {}) const;
     void save_chesscom_sync_state(ChessComSyncState state);
     [[nodiscard]] ChessComSyncState chesscom_sync_state() const;
+    [[nodiscard]] Variation create_variation(std::string_view game_id, std::size_t root_ply,
+                                             std::string root_position = "after");
+    [[nodiscard]] Variation extend_variation(std::string_view variation_id,
+                                             std::uint64_t node_id, std::string_view uci);
+    [[nodiscard]] Variation set_variation_cursor(std::string_view variation_id,
+                                                 std::uint64_t node_id);
+    [[nodiscard]] Variation reset_variation(std::string_view variation_id);
+    [[nodiscard]] std::optional<Variation> variation(std::string_view variation_id) const;
+    [[nodiscard]] std::vector<Variation> variations(std::string_view game_id) const;
+    [[nodiscard]] bool delete_variation(std::string_view variation_id);
+    [[nodiscard]] ReviewAttempt record_review_attempt(std::string_view game_id,
+                                                      std::size_t ply,
+                                                      std::string_view uci);
+    [[nodiscard]] std::vector<ReviewAttempt>
+    review_attempts(std::string_view game_id) const;
 
   private:
     storage::EventLog& log_;
@@ -179,6 +227,10 @@ class Repository {
     std::map<std::string, ChessComArchiveEntry> chesscom_archive_;
     std::map<std::string, ChessComMonthCheckpoint> chesscom_checkpoints_;
     ChessComSyncState chesscom_sync_state_;
+    std::map<std::string, Variation> variations_;
+    std::uint64_t next_variation_id_{1};
+    std::vector<ReviewAttempt> review_attempts_;
+    std::uint64_t next_review_attempt_id_{1};
     std::uint64_t projection_event_id_{0};
     bool projection_contiguous_{true};
 
@@ -194,5 +246,7 @@ class Repository {
 [[nodiscard]] json::Value to_json(const analysis::GameAnalysis& analysis);
 [[nodiscard]] json::Value to_json(const StoredGame& game, bool include_pgn = false);
 [[nodiscard]] analysis::GameAnalysis analysis_from_json(const json::Value& value);
+[[nodiscard]] json::Value to_json(const Variation& variation);
+[[nodiscard]] json::Value to_json(const ReviewAttempt& attempt);
 
 } // namespace pct::app

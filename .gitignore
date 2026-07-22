@@ -39,3 +39,10 @@ web/dist/
 
 # Private product and learning documentation (never commit publicly)
 /docs/
+
+# Historical documentation retained only on this machine
+/archive/
+
+# Local visual-QA evidence
+/artifacts/ui-audit/
+/artifacts/playwright/

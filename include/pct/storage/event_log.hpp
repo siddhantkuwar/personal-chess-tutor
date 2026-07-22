@@ -40,6 +40,9 @@ enum class EventType : std::uint16_t {
     ChessComArchiveChunkIndexed = 22,
     ChessComMonthCheckpointed = 23,
     ChessComSyncStateChanged = 24,
+    VariationSaved = 25,
+    VariationDeleted = 26,
+    ReviewAttempted = 27,
 };
 
 struct Event {

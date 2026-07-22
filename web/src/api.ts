@@ -12,7 +12,10 @@ import type {
   Profile,
   ResourceRecommendation,
   RuntimeSettings,
+  ReviewAttempt,
   StoredGame,
+  Variation,
+  VariationAnalysis,
 } from "./types";
 
 export class ApiError extends Error {
@@ -58,6 +61,59 @@ export async function loadGame(id: string): Promise<StoredGame> {
   return normalizeStoredGame(await request<StoredGame>(`/api/games/${encodeURIComponent(id)}`));
 }
 
+export function createVariation(gameId: string, rootPly: number, rootPosition: "before" | "after"): Promise<Variation> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations`, {
+    method: "POST",
+    body: JSON.stringify({ root_ply: rootPly, root_position: rootPosition }),
+  });
+}
+
+export async function listVariations(gameId: string): Promise<Variation[]> {
+  const response = await request<{ variations: Variation[] }>(`/api/games/${encodeURIComponent(gameId)}/variations`);
+  return response.variations;
+}
+
+export function extendVariation(gameId: string, variationId: string, nodeId: number, uci: string): Promise<Variation> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations/${encodeURIComponent(variationId)}/moves`, {
+    method: "POST",
+    body: JSON.stringify({ node_id: nodeId, uci }),
+  });
+}
+
+export function setVariationCursor(gameId: string, variationId: string, nodeId: number): Promise<Variation> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations/${encodeURIComponent(variationId)}/cursor`, {
+    method: "POST",
+    body: JSON.stringify({ node_id: nodeId }),
+  });
+}
+
+export function resetVariation(gameId: string, variationId: string): Promise<Variation> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations/${encodeURIComponent(variationId)}/reset`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function deleteVariation(gameId: string, variationId: string): Promise<{ deleted: boolean; id: string }> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations/${encodeURIComponent(variationId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function analyzeVariation(gameId: string, variationId: string): Promise<VariationAnalysis> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/variations/${encodeURIComponent(variationId)}/analysis`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function submitReviewAttempt(gameId: string, ply: number, uci: string): Promise<ReviewAttempt> {
+  return request(`/api/games/${encodeURIComponent(gameId)}/moves/${ply}/retry`, {
+    method: "POST",
+    body: JSON.stringify({ uci }),
+  });
+}
+
 function normalizeStoredGame(game: StoredGame): StoredGame {
   for (const move of game.analysis?.moves ?? []) {
     const value = String(move.classification || move.quality || "Good");
@@ -69,15 +125,13 @@ function normalizeStoredGame(game: StoredGame): StoredGame {
 export function importGame(input: { url: string } | { pgn: string }): Promise<{
   duplicate: boolean;
   game_id: string;
-  job: Job;
 }> {
   return request("/api/import", { method: "POST", body: JSON.stringify(input) });
 }
 
 /**
- * Correctly models both API outcomes. Retained separately so existing callers
- * of importGame keep their Phase 1 compile-time contract while Phase 2 can
- * render asynchronous URL-resolution progress.
+ * Models synchronous local/PGN import and asynchronous Chess.com resolution.
+ * Import persists a canonical game; analysis is a separate explicit action.
  */
 export function importGameObservable(
   input: { url: string; username?: string } | { pgn: string },

@@ -211,6 +211,6 @@ restore, confirmed reset, and uninstall guidance.
 ## Privacy
 
 The service binds to loopback, stores data locally, and has no account, telemetry, remote
-database, paid API, or LLM dependency. Product requirements, phase plans, and the interactive
-developer guide live in `docs/`; that directory is intentionally ignored and must not be
-committed publicly.
+database, paid API, or LLM dependency. Canonical product and engineering requirements live in
+`ground-truth/`. Historical phase plans and the private interactive developer guide are retained
+locally under the ignored `archive/` and `docs/` directories and must not be committed publicly.

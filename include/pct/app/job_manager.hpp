@@ -63,6 +63,7 @@ class JobManager {
     [[nodiscard]] std::size_t cache_capacity() const { return analyzer_.cache_capacity(); }
     [[nodiscard]] std::size_t worker_count() const noexcept { return options_.workers; }
     [[nodiscard]] std::size_t queued_count() const;
+    [[nodiscard]] engine::AnalysisResult analyze_variation_position(std::string_view fen);
     [[nodiscard]] std::size_t queue_capacity() const noexcept { return options_.max_queued; }
     void set_observer(JobObserver observer);
 

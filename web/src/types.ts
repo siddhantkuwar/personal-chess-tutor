@@ -99,8 +99,50 @@ export interface StoredGame {
     book_ply: number;
     departure_ply: number | null;
     opening_book_version: string;
+    accuracy: number;
+    white_accuracy: number;
+    black_accuracy: number;
+    accuracy_sample_size: number;
+    accuracy_version: string;
   } | null;
   pgn?: string;
+}
+
+export interface VariationNode {
+  id: number;
+  parent_id: number;
+  uci: string;
+  san: string;
+  fen: string;
+  children: number[];
+}
+
+export interface Variation {
+  id: string;
+  game_id: string;
+  root_ply: number;
+  root_position: "before" | "after";
+  root_fen: string;
+  current_node_id: number;
+  next_node_id: number;
+  engine_configuration: string;
+  updated_at_ms: number;
+  nodes: VariationNode[];
+}
+
+export interface VariationAnalysis {
+  best_move: string;
+  ponder_move: string;
+  lines: EngineLine[];
+}
+
+export interface ReviewAttempt {
+  id: number;
+  game_id: string;
+  ply: number;
+  uci: string;
+  accepted: boolean;
+  attempted_at_ms: number;
 }
 
 export interface DrillAttempt {
@@ -332,7 +374,6 @@ export interface ImportedGameResponse {
   status: "imported";
   duplicate: boolean;
   game_id: string;
-  job: Job;
 }
 
 export interface ResolvingImportResponse {

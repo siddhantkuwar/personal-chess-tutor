@@ -102,7 +102,6 @@ class IngestManager {
 
     import::ImportService& importer_;
     Repository& repository_;
-    JobManager& jobs_;
     import::ChessComArchiveClient client_;
     IngestOptions options_;
     mutable std::mutex mutex_;

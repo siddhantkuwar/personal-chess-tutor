@@ -247,10 +247,10 @@ json::Value to_json(const IngestSync& value) {
 }
 
 IngestManager::IngestManager(import::ImportService& importer, Repository& repository,
-                             JobManager& jobs, import::HttpTransport transport,
+                             JobManager&, import::HttpTransport transport,
                              import::RetrySleeper sleeper, IngestOptions options,
                              std::string startup_username)
-    : importer_(importer), repository_(repository), jobs_(jobs),
+    : importer_(importer), repository_(repository),
       client_(std::move(transport), std::move(sleeper)), options_(std::move(options)) {
     if (options_.max_pending == 0 || options_.max_history == 0)
         throw Error(ErrorCode::InvalidArgument, "ingest bounds must be positive");
@@ -693,7 +693,6 @@ void IngestManager::run_resolution(std::string id) {
         }
         if (imported) {
             static_cast<void>(repository_.add(*imported));
-            static_cast<void>(jobs_.start(imported->game.identity, engine::AnalysisPriority::Interactive));
             state.status = "resolved";
             state.imported_game_id = imported->game.identity;
         }

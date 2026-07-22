@@ -20,6 +20,8 @@ inline constexpr std::string_view classification_model_version =
     "tutor-classification-model-1";
 inline constexpr std::string_view expected_points_model_version =
     "tutor-logistic-unrated-1500-v1";
+inline constexpr std::string_view accuracy_model_version =
+    "tutor-expected-points-squared-v1";
 
 enum class AnalysisStage { Parsing, ShallowScan, DeepAnalysis, Complete };
 enum class GamePhase { Opening, Middlegame, Endgame };
@@ -115,6 +117,11 @@ struct GameAnalysis {
     std::size_t book_ply{0};
     std::optional<std::size_t> departure_ply;
     std::string opening_book_version{std::string(::pct::analysis::opening_book_version)};
+    double accuracy{0.0};
+    double white_accuracy{0.0};
+    double black_accuracy{0.0};
+    std::size_t accuracy_sample_size{0};
+    std::string accuracy_version{std::string(::pct::analysis::accuracy_model_version)};
 };
 
 struct OpeningMatch {
@@ -177,6 +184,9 @@ class Analyzer {
                                             CancellationToken stop_token = {},
                                             engine::AnalysisPriority priority =
                                                 engine::AnalysisPriority::CurrentGame);
+    [[nodiscard]] engine::AnalysisResult analyze_position(
+        std::string_view fen, CancellationToken stop_token = {},
+        engine::AnalysisPriority priority = engine::AnalysisPriority::Historical);
     [[nodiscard]] static GamePhase classify_phase(const chess::Board& board, std::size_t ply);
     [[nodiscard]] std::size_t cache_hits() const { return cache_.hit_count(); }
     [[nodiscard]] std::size_t cache_misses() const { return cache_.miss_count(); }
