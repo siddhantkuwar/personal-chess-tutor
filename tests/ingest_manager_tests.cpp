@@ -85,7 +85,7 @@ std::string archives_json(std::size_t count) {
 
 } // namespace
 
-TEST_CASE("ingest resolution uses exact local archive hit and starts interactive analysis") {
+TEST_CASE("ingest resolution uses exact local archive hit without starting analysis") {
     IngestFixture fixture;
     const std::string id = "171626462440";
     static_cast<void>(fixture.repository.index_chesscom_archive_chunk({
@@ -102,7 +102,7 @@ TEST_CASE("ingest resolution uses exact local archive hit and starts interactive
     CHECK_EQ(done->status, "resolved");
     CHECK_EQ(done->source, "local_archive");
     CHECK(!done->imported_game_id.empty());
-    CHECK(!fixture.jobs.list().empty());
+    CHECK(fixture.jobs.list().empty());
 }
 
 TEST_CASE("ingest resolution accepts current Chess.com generic Site PGN") {

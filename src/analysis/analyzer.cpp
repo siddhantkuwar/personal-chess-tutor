@@ -6,10 +6,42 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <sstream>
 
 namespace pct::analysis {
 namespace {
+
+void calculate_accuracy(GameAnalysis& analysis) {
+    double total = 0.0;
+    double white = 0.0;
+    double black = 0.0;
+    std::size_t white_count = 0;
+    std::size_t black_count = 0;
+    for (const auto& move : analysis.moves) {
+        const double loss = std::clamp(move.expected_points_loss, 0.0, 1.0);
+        const double score = move.quality == MoveQuality::Book
+                                 ? 100.0
+                                 : 100.0 * (1.0 - loss) * (1.0 - loss);
+        total += score;
+        if (move.side == "white") {
+            white += score;
+            ++white_count;
+        } else {
+            black += score;
+            ++black_count;
+        }
+    }
+    analysis.accuracy_sample_size = analysis.moves.size();
+    analysis.accuracy = analysis.moves.empty()
+                            ? 0.0
+                            : total / static_cast<double>(analysis.moves.size());
+    analysis.white_accuracy =
+        white_count == 0 ? 0.0 : white / static_cast<double>(white_count);
+    analysis.black_accuracy =
+        black_count == 0 ? 0.0 : black / static_cast<double>(black_count);
+    analysis.accuracy_version = std::string(accuracy_model_version);
+}
 
 int piece_value(chess::PieceType type) {
     switch (type) {
@@ -221,6 +253,13 @@ int score_for_white(const engine::AnalysisResult& result, const chess::Board& bo
     return board.side_to_move() == chess::Color::White ? score : -score;
 }
 
+int score_for_white(const engine::PrincipalVariation& line, const chess::Board& board) {
+    int score = line.centipawns.value_or(0);
+    if (line.mate)
+        score = *line.mate > 0 ? 100000 - *line.mate : -100000 - *line.mate;
+    return board.side_to_move() == chess::Color::White ? score : -score;
+}
+
 std::optional<chess::Move> parse_uci_move(chess::Board& board, std::string_view uci) {
     if (uci.size() < 4)
         return std::nullopt;
@@ -248,32 +287,115 @@ std::optional<chess::Move> parse_uci_move(chess::Board& board, std::string_view 
     }
 }
 
-MoveQuality quality_for(const chess::Game& game, std::size_t index, int loss,
-                        const chess::Board& after) {
+std::vector<std::string> tactical_tags_for(const chess::Game& game, std::size_t index,
+                                           const chess::Board& before,
+                                           const chess::Board& after, int material_delta) {
     const auto& ply = game.plies[index];
-    if (loss >= 250)
-        return MoveQuality::Blunder;
-    if (loss >= 120)
-        return MoveQuality::Mistake;
-    if (loss >= 60)
-        return MoveQuality::Inaccuracy;
+    std::vector<std::string> tags;
     if (ply.move.has(chess::Capture)) {
+        tags.push_back("capture");
         if (index > 0 && game.plies[index - 1].move.has(chess::Capture) &&
-            ply.move.to == game.plies[index - 1].move.to) {
-            return MoveQuality::Recapture;
-        }
-        return MoveQuality::Capture;
+            ply.move.to == game.plies[index - 1].move.to)
+            tags.push_back("recapture");
     }
     if (after.in_check(after.side_to_move()))
-        return MoveQuality::Check;
-    const chess::Piece moved = chess::Board::from_fen(ply.fen_before).at(ply.move.from);
+        tags.push_back("check");
+    if (ply.move.has(chess::Promotion))
+        tags.push_back("promotion");
+    if (ply.move.has(chess::KingCastle) || ply.move.has(chess::QueenCastle))
+        tags.push_back("castling");
+    const chess::Piece moved = before.at(ply.move.from);
     const int destination_rank = static_cast<int>(ply.move.to / 8);
     if ((moved.type == chess::PieceType::Knight || moved.type == chess::PieceType::Bishop) &&
         ((moved.color == chess::Color::White && destination_rank > 0) ||
-         (moved.color == chess::Color::Black && destination_rank < 7))) {
-        return MoveQuality::Developing;
+         (moved.color == chess::Color::Black && destination_rank < 7)))
+        tags.push_back("development");
+    if (material_delta <= -300)
+        tags.push_back("material_sacrifice");
+    if (const std::string motif = tactical_motif(before, ply.move); !motif.empty())
+        tags.push_back(motif);
+    return tags;
+}
+
+std::string san_for_uci(chess::Board board, std::string_view uci) {
+    if (auto move = parse_uci_move(board, uci))
+        return chess::to_san(board, *move);
+    return {};
+}
+
+void populate_engine_contract(MoveAssessment& move, const chess::Game& game, std::size_t index,
+                              const engine::AnalysisResult& before_result,
+                              const engine::AnalysisResult& after_result,
+                              ClassificationState state, const OpeningMatch& opening) {
+    chess::Board before = chess::Board::from_fen(game.plies[index].fen_before);
+    chess::Board after = chess::Board::from_fen(game.plies[index].fen_after);
+    const chess::Color mover = before.side_to_move();
+    const int before_white = score_for_white(before_result, before);
+    const int after_white = score_for_white(after_result, after);
+    const int before_mover = mover == chess::Color::White ? before_white : -before_white;
+    const int after_mover = mover == chess::Color::White ? after_white : -after_white;
+    const int material_before = before.material(mover) - before.material(chess::opposite(mover));
+    const int material_after = after.material(mover) - after.material(chess::opposite(mover));
+
+    move.ply = index;
+    move.move_number = index / 2 + 1;
+    move.side = mover == chess::Color::White ? "white" : "black";
+    move.san = game.plies[index].san;
+    move.played_san = game.plies[index].san;
+    move.played_uci = chess::uci(game.plies[index].move);
+    move.fen_before = game.plies[index].fen_before;
+    move.fen_after = game.plies[index].fen_after;
+    move.evaluation_before = before_white;
+    move.evaluation_after = after_white;
+    move.evaluation_after_best = before_white;
+    move.loss = std::max(0, before_mover - after_mover);
+    move.material_delta = material_after - material_before;
+    move.expected_points_before = expected_points(before_white, mover);
+    move.expected_points_after = expected_points(after_white, mover);
+    move.expected_points_loss =
+        std::max(0.0, move.expected_points_before - move.expected_points_after);
+    move.quality = classify_expected_points_loss(move.expected_points_loss);
+    move.classification_state = state;
+    move.phase = Analyzer::classify_phase(before, index);
+    move.best_uci = before_result.best_move;
+    move.best_san = san_for_uci(before, move.best_uci);
+    move.best_response = after_result.best_move;
+    move.tactical_tags = tactical_tags_for(game, index, before, after, move.material_delta);
+    move.classification_reasons = {
+        "Tutor Classification Model 1 expected-points loss " +
+        std::to_string(move.expected_points_loss),
+        "neutral unrated-1500 calibration; labels may differ from other services",
+    };
+    move.principal_variation.clear();
+    move.acceptable_alternatives.clear();
+    if (!before_result.lines.empty()) {
+        const auto& principal = before_result.lines.front();
+        move.principal_variation = principal.moves;
+        move.depth = principal.depth;
+        move.nodes = principal.nodes;
+        move.time_ms = principal.time_ms;
+        move.multipv = static_cast<int>(before_result.lines.size());
+        const double top_expected = expected_points(score_for_white(principal, before), mover);
+        std::set<std::string> alternatives;
+        for (const auto& line : before_result.lines) {
+            if (line.moves.empty())
+                continue;
+            const double candidate = expected_points(score_for_white(line, before), mover);
+            if (top_expected - candidate <= 0.02 + 1e-9)
+                alternatives.insert(line.moves.front());
+        }
+        move.acceptable_alternatives.assign(alternatives.begin(), alternatives.end());
     }
-    return MoveQuality::Neutral;
+    if (index < opening.book_ply && move.expected_points_loss <= 0.05 + 1e-9) {
+        move.quality = MoveQuality::Book;
+        move.book_source = "local-opening-book";
+        move.book_version = opening.book_version;
+        move.classification_reasons.push_back(
+            "recognized by the versioned local opening source and not materially inferior");
+    } else {
+        move.book_source.clear();
+        move.book_version.clear();
+    }
 }
 
 std::string classify_category(const chess::Game& game, std::size_t index,
@@ -482,6 +604,16 @@ std::size_t AnalysisCache::eviction_count() const {
 Analyzer::Analyzer(engine::AnalysisEngine& engine, AnalysisCache& cache, AnalyzerOptions options)
     : engine_(engine), cache_(cache), options_(options) {}
 
+engine::AnalysisResult Analyzer::analyze_position(std::string_view fen,
+                                                  CancellationToken stop_token,
+                                                  engine::AnalysisPriority priority) {
+    const chess::Board board = chess::Board::from_fen(fen);
+    engine::AnalysisRequest request{board.to_fen(), options_.deep_depth,
+                                    std::chrono::milliseconds(0), 3};
+    request.priority = priority;
+    return analyze_cached(request, stop_token);
+}
+
 engine::AnalysisResult Analyzer::analyze_cached(const engine::AnalysisRequest& request,
                                                 CancellationToken stop_token) {
     engine::AnalysisResult result;
@@ -571,32 +703,13 @@ GameAnalysis Analyzer::analyze_shallow(const chess::Game& game, ProgressCallback
         after_request.priority = priority;
         before_results[index] = analyze_cached(before_request, stop_token);
         after_results[index] = analyze_cached(after_request, stop_token);
-        chess::Board before = chess::Board::from_fen(game.plies[index].fen_before);
-        chess::Board after = chess::Board::from_fen(game.plies[index].fen_after);
-        const int before_white = score_for_white(before_results[index], before);
-        const int after_white = score_for_white(after_results[index], after);
-        const chess::Color mover = before.side_to_move();
-        const int before_mover = mover == chess::Color::White ? before_white : -before_white;
-        const int after_mover = mover == chess::Color::White ? after_white : -after_white;
-        const int loss = std::max(0, before_mover - after_mover);
-        const int material_before =
-            before.material(mover) - before.material(chess::opposite(mover));
-        const int material_after = after.material(mover) - after.material(chess::opposite(mover));
-        analysis.moves.push_back(MoveAssessment{
-            index,
-            game.plies[index].san,
-            game.plies[index].fen_before,
-            game.plies[index].fen_after,
-            before_white,
-            after_white,
-            loss,
-            material_after - material_before,
-            quality_for(game, index, loss, after),
-            classify_phase(before, index),
-            after_results[index].best_move,
-        });
+        MoveAssessment assessment;
+        populate_engine_contract(assessment, game, index, before_results[index],
+                                 after_results[index], ClassificationState::Provisional, opening);
+        analysis.moves.push_back(std::move(assessment));
         report(AnalysisStage::ShallowScan, index + 1, game.plies.size(), "Scanning positions");
     }
+    calculate_accuracy(analysis);
     return analysis;
 }
 
@@ -613,40 +726,99 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
             progress(Progress{stage, complete, total, std::move(message)});
     };
 
+    const OpeningMatch opening{analysis.eco, analysis.opening, analysis.book_ply,
+                               analysis.departure_ply, analysis.opening_book_version};
     std::vector<std::size_t> candidates;
     for (std::size_t index = 0; index < analysis.moves.size(); ++index) {
-        if (analysis.moves[index].loss >= options_.candidate_threshold_cp ||
-            analysis.moves[index].material_delta <= -300) {
+        const auto quality = analysis.moves[index].quality;
+        const bool negative = quality == MoveQuality::Inaccuracy ||
+                              quality == MoveQuality::Mistake || quality == MoveQuality::Blunder;
+        const bool sacrifice = analysis.moves[index].material_delta <= -300;
+        const bool forced_or_unique =
+            analysis.moves[index].acceptable_alternatives.size() <= 1 &&
+            !analysis.moves[index].principal_variation.empty() &&
+            analysis.moves[index].expected_points_before >= 0.20 &&
+            analysis.moves[index].expected_points_before <= 0.85;
+        if (negative || sacrifice || forced_or_unique ||
+            analysis.moves[index].loss >= options_.candidate_threshold_cp) {
             candidates.push_back(index);
         }
     }
     std::stable_sort(candidates.begin(), candidates.end(),
                      [&](std::size_t left, std::size_t right) {
-                         return analysis.moves[left].loss > analysis.moves[right].loss;
+                         const auto priority_score = [&](std::size_t value) {
+                             const auto quality = analysis.moves[value].quality;
+                             const bool negative = quality == MoveQuality::Inaccuracy ||
+                                                   quality == MoveQuality::Mistake ||
+                                                   quality == MoveQuality::Blunder;
+                             return std::pair{negative ? 1 : 0, analysis.moves[value].loss};
+                         };
+                         return priority_score(left) > priority_score(right);
                      });
     if (candidates.size() > options_.max_deep_candidates)
         candidates.resize(options_.max_deep_candidates);
-
     for (std::size_t candidate_index = 0; candidate_index < candidates.size(); ++candidate_index) {
         const std::size_t index = candidates[candidate_index];
         engine::AnalysisRequest request{game.plies[index].fen_before, options_.deep_depth,
                                         std::chrono::milliseconds(0), 3};
         request.priority = priority;
         engine::AnalysisResult deep = analyze_cached(request, stop_token);
-        engine::AnalysisRequest after_request{game.plies[index].fen_after,
-                                              options_.shallow_depth,
-                                              std::chrono::milliseconds(0), 2};
+        engine::AnalysisRequest after_request{game.plies[index].fen_after, options_.deep_depth,
+                                              std::chrono::milliseconds(0), 3};
         after_request.priority = priority;
         const engine::AnalysisResult after_result =
             analyze_cached(after_request, stop_token);
+        populate_engine_contract(analysis.moves[index], game, index, deep, after_result,
+                                 ClassificationState::Final, opening);
         const std::string category = classify_mistake_category(game, index, deep, after_result);
+        auto& move = analysis.moves[index];
+        const bool missed_opportunity = category.starts_with("Missed ") ||
+                                        category == "Failed recapture";
+        if (move.quality != MoveQuality::Book && missed_opportunity &&
+            move.expected_points_loss > 0.05) {
+            move.quality = MoveQuality::Miss;
+            move.classification_reasons.push_back(
+                "deep verification found an unplayed tactical or forced opportunity: " + category);
+            move.tactical_tags.push_back("missed_opportunity");
+        } else if (move.quality != MoveQuality::Book && move.expected_points_loss <= 0.02 &&
+                   move.material_delta <= -300 && move.expected_points_after >= 0.50 &&
+                   move.expected_points_before < 0.90) {
+            move.quality = MoveQuality::Brilliant;
+            move.classification_reasons.push_back(
+                "deep verification found a sound, non-trivial material sacrifice");
+        } else if (move.quality != MoveQuality::Book && move.expected_points_loss <= 0.02 &&
+                   move.acceptable_alternatives.size() == 1 && deep.lines.size() >= 2) {
+            chess::Board before = chess::Board::from_fen(game.plies[index].fen_before);
+            const chess::Color mover = before.side_to_move();
+            const double best = expected_points(score_for_white(deep.lines[0], before), mover);
+            const double second = expected_points(score_for_white(deep.lines[1], before), mover);
+            if (best - second >= 0.10 && move.expected_points_before < 0.90) {
+                move.quality = MoveQuality::Great;
+                move.classification_reasons.push_back(
+                    "deep MultiPV verification found one critical move with at least 0.10 expected-points separation");
+            }
+        }
+        if (move.quality == MoveQuality::Blunder) {
+            if (move.material_delta <= -300)
+                move.tactical_tags.push_back("material_loss");
+            else if (!after_result.lines.empty() && after_result.lines.front().mate)
+                move.tactical_tags.push_back("forced_mate");
+            else
+                move.tactical_tags.push_back("decisive_outcome_loss");
+            move.classification_reasons.push_back(
+                "deep verification confirmed a severe, explainable outcome loss");
+        }
         std::vector<std::string> better_moves;
         for (const auto& line : deep.lines) {
             if (!line.moves.empty())
                 better_moves.push_back(line.moves.front());
         }
         const std::string punishment = after_result.best_move;
-        analysis.mistakes.push_back(Mistake{
+        const bool review_error = move.quality == MoveQuality::Inaccuracy ||
+                                  move.quality == MoveQuality::Mistake ||
+                                  move.quality == MoveQuality::Miss ||
+                                  move.quality == MoveQuality::Blunder;
+        if (review_error) analysis.mistakes.push_back(Mistake{
             0,
             index,
             game.plies[index].san,
@@ -664,6 +836,11 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
             "proven",
             "taxonomy-2",
         });
+        if (!review_error) {
+            report(AnalysisStage::DeepAnalysis, candidate_index + 1, candidates.size(),
+                   "Deep analysis");
+            continue;
+        }
         auto& classified = analysis.mistakes.back();
         classified.evidence.push_back("evaluation loss " + std::to_string(classified.loss) +
                                       " centipawns");
@@ -692,6 +869,14 @@ GameAnalysis Analyzer::analyze_deep(const chess::Game& game, GameAnalysis analys
     for (std::size_t index = 0; index < analysis.mistakes.size(); ++index) {
         analysis.mistakes[index].rank = index + 1;
     }
+    for (auto& move : analysis.moves) {
+        if (move.classification_state != ClassificationState::Final) {
+            move.classification_state = ClassificationState::Final;
+            move.classification_reasons.push_back(
+                "shallow result finalized because no focused-verification trigger was present");
+        }
+    }
+    calculate_accuracy(analysis);
     report(AnalysisStage::Complete, 1, 1, "Analysis complete");
     return analysis;
 }
@@ -731,26 +916,64 @@ std::string_view name(GamePhase phase) {
 
 std::string_view name(MoveQuality quality) {
     switch (quality) {
-    case MoveQuality::Developing:
-        return "developing";
-    case MoveQuality::Capture:
-        return "capture";
-    case MoveQuality::Check:
-        return "check";
-    case MoveQuality::Recapture:
-        return "recapture";
-    case MoveQuality::Threat:
-        return "threat";
-    case MoveQuality::Neutral:
-        return "neutral";
+    case MoveQuality::Brilliant:
+        return "brilliant";
+    case MoveQuality::Great:
+        return "great";
+    case MoveQuality::Best:
+        return "best";
+    case MoveQuality::Excellent:
+        return "excellent";
+    case MoveQuality::Good:
+        return "good";
+    case MoveQuality::Book:
+        return "book";
     case MoveQuality::Inaccuracy:
         return "inaccuracy";
     case MoveQuality::Mistake:
         return "mistake";
+    case MoveQuality::Miss:
+        return "miss";
     case MoveQuality::Blunder:
         return "blunder";
     }
     return "unknown";
+}
+
+std::string_view name(ClassificationState state) {
+    switch (state) {
+    case ClassificationState::Pending:
+        return "pending";
+    case ClassificationState::Provisional:
+        return "provisional";
+    case ClassificationState::Final:
+        return "final";
+    }
+    return "pending";
+}
+
+double expected_points(int evaluation_cp, chess::Color perspective) {
+    constexpr double scale_cp = 400.0;
+    const int clamped_white = std::clamp(evaluation_cp, -1000, 1000);
+    const int perspective_cp =
+        perspective == chess::Color::White ? clamped_white : -clamped_white;
+    return 1.0 / (1.0 + std::exp(-static_cast<double>(perspective_cp) / scale_cp));
+}
+
+MoveQuality classify_expected_points_loss(double loss) {
+    const double bounded = std::clamp(loss, 0.0, 1.0);
+    constexpr double epsilon = 1e-9;
+    if (bounded <= 0.005 + epsilon)
+        return MoveQuality::Best;
+    if (bounded <= 0.02 + epsilon)
+        return MoveQuality::Excellent;
+    if (bounded <= 0.05 + epsilon)
+        return MoveQuality::Good;
+    if (bounded <= 0.10 + epsilon)
+        return MoveQuality::Inaccuracy;
+    if (bounded <= 0.20 + epsilon)
+        return MoveQuality::Mistake;
+    return MoveQuality::Blunder;
 }
 
 } // namespace pct::analysis

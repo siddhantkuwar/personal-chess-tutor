@@ -2,7 +2,9 @@
 
 #include "pct/analysis/analyzer.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 
 using namespace pct;
 
@@ -71,7 +73,29 @@ TEST_CASE("analysis identifies a hanging queen with evidence") {
     const analysis::GameAnalysis result = analyzer.analyze(
         game, [&](const analysis::Progress& update) { progress.push_back(update); });
     CHECK_EQ(result.moves.size(), game.plies.size());
+    for (const auto& move : result.moves) {
+        CHECK(move.classification_state == analysis::ClassificationState::Final);
+        CHECK_EQ(move.classification_model_version,
+                 std::string(analysis::classification_model_version));
+        CHECK_EQ(move.expected_points_model_version,
+                 std::string(analysis::expected_points_model_version));
+        CHECK(!move.classification_reasons.empty());
+        CHECK(!move.played_uci.empty());
+        CHECK_EQ(move.played_san, move.san);
+        CHECK(move.move_number == move.ply / 2 + 1);
+        CHECK(move.side == (move.ply % 2 == 0 ? "white" : "black"));
+        CHECK(move.expected_points_loss >= 0.0);
+        CHECK(move.expected_points_loss <= 1.0);
+    }
     CHECK(!result.mistakes.empty());
+    CHECK_EQ(result.accuracy_sample_size, game.plies.size());
+    CHECK(result.accuracy >= 0.0);
+    CHECK(result.accuracy <= 100.0);
+    CHECK(result.white_accuracy >= 0.0);
+    CHECK(result.white_accuracy <= 100.0);
+    CHECK(result.black_accuracy >= 0.0);
+    CHECK(result.black_accuracy <= 100.0);
+    CHECK_EQ(result.accuracy_version, std::string(analysis::accuracy_model_version));
     CHECK_EQ(result.mistakes.front().category, "Hanging queen");
     CHECK(result.mistakes.front().loss >= 700);
     CHECK(!result.mistakes.front().punishment.empty());
@@ -79,6 +103,63 @@ TEST_CASE("analysis identifies a hanging queen with evidence") {
     CHECK_EQ(result.mistakes.front().classifier_version, "taxonomy-2");
     CHECK(progress.back().stage == analysis::AnalysisStage::Complete);
     CHECK(cache.size() > game.plies.size());
+}
+
+TEST_CASE("Tutor Classification Model 1 documents its curve and every baseline boundary") {
+    CHECK(std::abs(analysis::expected_points(0, chess::Color::White) - 0.5) < 1e-12);
+    CHECK(analysis::expected_points(400, chess::Color::White) > 0.73);
+    CHECK(analysis::expected_points(400, chess::Color::Black) < 0.27);
+    CHECK_EQ(analysis::expected_points(100000, chess::Color::White),
+             analysis::expected_points(1000, chess::Color::White));
+
+    CHECK(analysis::classify_expected_points_loss(0.0) == analysis::MoveQuality::Best);
+    CHECK(analysis::classify_expected_points_loss(0.005) == analysis::MoveQuality::Best);
+    CHECK(analysis::classify_expected_points_loss(0.0051) ==
+          analysis::MoveQuality::Excellent);
+    CHECK(analysis::classify_expected_points_loss(0.02) ==
+          analysis::MoveQuality::Excellent);
+    CHECK(analysis::classify_expected_points_loss(0.0201) == analysis::MoveQuality::Good);
+    CHECK(analysis::classify_expected_points_loss(0.05) == analysis::MoveQuality::Good);
+    CHECK(analysis::classify_expected_points_loss(0.0501) ==
+          analysis::MoveQuality::Inaccuracy);
+    CHECK(analysis::classify_expected_points_loss(0.10) ==
+          analysis::MoveQuality::Inaccuracy);
+    CHECK(analysis::classify_expected_points_loss(0.1001) ==
+          analysis::MoveQuality::Mistake);
+    CHECK(analysis::classify_expected_points_loss(0.20) == analysis::MoveQuality::Mistake);
+    CHECK(analysis::classify_expected_points_loss(0.2001) ==
+          analysis::MoveQuality::Blunder);
+
+    CHECK_EQ(analysis::name(analysis::MoveQuality::Brilliant), "brilliant");
+    CHECK_EQ(analysis::name(analysis::MoveQuality::Great), "great");
+    CHECK_EQ(analysis::name(analysis::MoveQuality::Miss), "miss");
+    CHECK_EQ(analysis::name(analysis::ClassificationState::Provisional), "provisional");
+}
+
+TEST_CASE("shallow per-ply contract keeps quality separate from tactical facts") {
+    const chess::Game game = chess::parse_pgn(R"pgn(
+[Result "*"]
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. Bxf7+ *
+)pgn");
+    TacticalEngine engine;
+    analysis::AnalysisCache cache;
+    analysis::Analyzer analyzer(engine, cache, analysis::AnalyzerOptions{4, 6, 80, 5, 3});
+    const auto result = analyzer.analyze_shallow(game);
+    CHECK_EQ(result.moves.size(), game.plies.size());
+    CHECK(result.moves.front().classification_state ==
+          analysis::ClassificationState::Provisional);
+    CHECK(result.moves.front().quality == analysis::MoveQuality::Book);
+    CHECK_EQ(result.moves.front().book_source, "local-opening-book");
+    CHECK_EQ(result.moves.front().book_version, std::string(analysis::opening_book_version));
+    const auto& capture = result.moves.back();
+    CHECK(std::find(capture.tactical_tags.begin(), capture.tactical_tags.end(), "capture") !=
+          capture.tactical_tags.end());
+    CHECK(std::find(capture.tactical_tags.begin(), capture.tactical_tags.end(), "check") !=
+          capture.tactical_tags.end());
+    CHECK(analysis::name(capture.quality) != "capture");
+    CHECK(!capture.best_uci.empty());
+    CHECK(!capture.principal_variation.empty());
+    CHECK_EQ(capture.multipv, 2);
 }
 
 TEST_CASE("analysis emits time-management categories only from clock evidence") {

@@ -42,8 +42,14 @@ the user is actively opening.
 
 The supplied regression URL, `https://www.chess.com/game/live/171626462440`, resolves from a fresh
 no-profile instance by identifying `superking116` from the public page and importing the exact
-archive PGN. Phase 1 intentionally made no browser UI or visual-design changes; the import/profile
-controls and review redesign remain Phase 2 work in [`RESTRUCTURE_PLAN.md`](RESTRUCTURE_PLAN.md).
+archive PGN.
+
+**Phase 2.1 — Chronological review was completed on 2026-07-19.** Imported games now open on
+White's first move and use a continuous scoresheet with versioned per-ply classifications,
+expected-point evidence, separate tactical tags, guided autoplay, a clickable evaluation line,
+side-by-side classification counts, and distinct Try, Reveal, and Variation modes. The board uses
+the attributed CC BY 4.0 Lasker Staunton set. The local model is intentionally named Tutor
+Classification Model 1 and does not claim to reproduce Chess.com's proprietary accuracy model.
 
 ## Architecture
 
@@ -205,6 +211,6 @@ restore, confirmed reset, and uninstall guidance.
 ## Privacy
 
 The service binds to loopback, stores data locally, and has no account, telemetry, remote
-database, paid API, or LLM dependency. Product requirements, phase plans, and the interactive
-developer guide live in `docs/`; that directory is intentionally ignored and must not be
-committed publicly.
+database, paid API, or LLM dependency. Canonical product and engineering requirements live in
+`ground-truth/`. Historical phase plans and the private interactive developer guide are retained
+locally under the ignored `archive/` and `docs/` directories and must not be committed publicly.

@@ -2,6 +2,7 @@
 
 #include "pct/common/error.hpp"
 #include "pct/common/log.hpp"
+#include "pct/chess/san.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -41,7 +42,7 @@ import::ImportMethod parse_method(std::string_view method) {
 }
 
 std::optional<chess::Move> parse_uci(chess::Board& board, std::string_view uci) {
-    if (uci.size() < 4)
+    if (uci.size() != 4 && uci.size() != 5)
         return std::nullopt;
     chess::PieceType promotion = chess::PieceType::Queen;
     if (uci.size() >= 5 && uci[4] == 'n') promotion = chess::PieceType::Knight;
@@ -53,6 +54,35 @@ std::optional<chess::Move> parse_uci(chess::Board& board, std::string_view uci) 
     } catch (const Error&) {
         return std::nullopt;
     }
+}
+
+Variation variation_from_json(const json::Value& value) {
+    Variation variation;
+    variation.id = value.at("id").as_string();
+    variation.game_id = value.at("game_id").as_string();
+    variation.root_ply = value.at("root_ply").as_size();
+    variation.root_position = value.at("root_position").as_string();
+    variation.root_fen = value.at("root_fen").as_string();
+    variation.current_node_id = static_cast<std::uint64_t>(value.at("current_node_id").as_number());
+    variation.next_node_id = static_cast<std::uint64_t>(value.at("next_node_id").as_number());
+    variation.engine_configuration = value.at("engine_configuration").as_string();
+    variation.updated_at_ms = static_cast<std::int64_t>(value.at("updated_at_ms").as_number());
+    for (const auto& encoded : value.at("nodes").as_array()) {
+        VariationNode node;
+        node.id = static_cast<std::uint64_t>(encoded.at("id").as_number());
+        node.parent_id = static_cast<std::int64_t>(encoded.at("parent_id").as_number());
+        node.uci = encoded.at("uci").as_string();
+        node.san = encoded.at("san").as_string();
+        node.fen = encoded.at("fen").as_string();
+        for (const auto& child : encoded.at("children").as_array())
+            node.children.push_back(static_cast<std::uint64_t>(child.as_number()));
+        variation.nodes.emplace(node.id, std::move(node));
+    }
+    if (variation.id.empty() || variation.game_id.empty() || variation.nodes.empty() ||
+        !variation.nodes.contains(0) || !variation.nodes.contains(variation.current_node_id))
+        throw Error(ErrorCode::Corruption, "persisted variation is incomplete");
+    static_cast<void>(chess::Board::from_fen(variation.root_fen));
+    return variation;
 }
 
 std::string piece_name(chess::PieceType type) {
@@ -130,16 +160,59 @@ engine::AnalysisResult engine_from_json(const json::Value& value) {
 }
 
 json::Value move_json(const analysis::MoveAssessment& move) {
+    json::Value::Array reasons;
+    for (const auto& reason : move.classification_reasons)
+        reasons.emplace_back(reason);
+    json::Value::Array tactical_tags;
+    for (const auto& tag : move.tactical_tags)
+        tactical_tags.emplace_back(tag);
+    json::Value::Array principal_variation;
+    for (const auto& uci : move.principal_variation)
+        principal_variation.emplace_back(uci);
+    json::Value::Array alternatives;
+    for (const auto& uci : move.acceptable_alternatives)
+        alternatives.emplace_back(uci);
     return json::Value::Object{
         {"ply", move.ply},
+        {"move_number", move.move_number},
+        {"side", move.side},
         {"san", move.san},
+        {"played_uci", move.played_uci},
+        {"played_san", move.played_san},
         {"fen_before", move.fen_before},
         {"fen_after", move.fen_after},
+        {"best_uci", move.best_uci},
+        {"best_san", move.best_san},
         {"evaluation_before", move.evaluation_before},
         {"evaluation_after", move.evaluation_after},
+        {"evaluation_after_best", move.evaluation_after_best},
+        {"expected_points_before", move.expected_points_before},
+        {"expected_points_after", move.expected_points_after},
+        {"expected_points_loss", move.expected_points_loss},
         {"loss", move.loss},
         {"material_delta", move.material_delta},
         {"quality", std::string(analysis::name(move.quality))},
+        {"classification", [&] {
+             std::string label(analysis::name(move.quality));
+             if (!label.empty())
+                 label.front() = static_cast<char>(std::toupper(
+                     static_cast<unsigned char>(label.front())));
+             return label;
+         }()},
+        {"classification_state", std::string(analysis::name(move.classification_state))},
+        {"classification_reasons", std::move(reasons)},
+        {"tactical_tags", std::move(tactical_tags)},
+        {"principal_variation", std::move(principal_variation)},
+        {"acceptable_alternatives", std::move(alternatives)},
+        {"book_source", move.book_source},
+        {"book_version", move.book_version},
+        {"depth", move.depth},
+        {"nodes", static_cast<double>(move.nodes)},
+        {"time_ms", static_cast<double>(move.time_ms)},
+        {"multipv", move.multipv},
+        {"engine_version", move.engine_version},
+        {"classification_model_version", move.classification_model_version},
+        {"expected_points_model_version", move.expected_points_model_version},
         {"phase", std::string(analysis::name(move.phase))},
         {"best_response", move.best_response},
     };
@@ -154,39 +227,114 @@ analysis::GamePhase parse_phase(std::string_view value) {
 }
 
 analysis::MoveQuality parse_quality(std::string_view value) {
-    if (value == "developing")
-        return analysis::MoveQuality::Developing;
-    if (value == "capture")
-        return analysis::MoveQuality::Capture;
-    if (value == "check")
-        return analysis::MoveQuality::Check;
-    if (value == "recapture")
-        return analysis::MoveQuality::Recapture;
-    if (value == "threat")
-        return analysis::MoveQuality::Threat;
+    std::string normalized(value);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    value = normalized;
+    if (value == "brilliant")
+        return analysis::MoveQuality::Brilliant;
+    if (value == "great")
+        return analysis::MoveQuality::Great;
+    if (value == "best")
+        return analysis::MoveQuality::Best;
+    if (value == "excellent")
+        return analysis::MoveQuality::Excellent;
+    if (value == "good")
+        return analysis::MoveQuality::Good;
+    if (value == "book")
+        return analysis::MoveQuality::Book;
     if (value == "inaccuracy")
         return analysis::MoveQuality::Inaccuracy;
     if (value == "mistake")
         return analysis::MoveQuality::Mistake;
+    if (value == "miss")
+        return analysis::MoveQuality::Miss;
     if (value == "blunder")
         return analysis::MoveQuality::Blunder;
-    return analysis::MoveQuality::Neutral;
+    // Legacy tactical/neutral labels were not quality judgments. They migrate to Good and are
+    // retained as tactical tags by move_from_json.
+    return analysis::MoveQuality::Good;
+}
+
+analysis::ClassificationState parse_classification_state(std::string_view value) {
+    if (value == "pending")
+        return analysis::ClassificationState::Pending;
+    if (value == "provisional")
+        return analysis::ClassificationState::Provisional;
+    return analysis::ClassificationState::Final;
+}
+
+std::vector<std::string> string_array(const json::Value& value, std::string_view key) {
+    const json::Value empty{json::Value::Array{}};
+    std::vector<std::string> result;
+    for (const auto& item : value.get(key, empty).as_array())
+        result.push_back(item.as_string());
+    return result;
 }
 
 analysis::MoveAssessment move_from_json(const json::Value& value) {
-    return analysis::MoveAssessment{
-        value.at("ply").as_size(),
-        value.at("san").as_string(),
-        value.at("fen_before").as_string(),
-        value.at("fen_after").as_string(),
-        value.at("evaluation_before").as_int(),
-        value.at("evaluation_after").as_int(),
-        value.at("loss").as_int(),
-        value.at("material_delta").as_int(),
-        parse_quality(value.at("quality").as_string()),
-        parse_phase(value.at("phase").as_string()),
-        value.at("best_response").as_string(),
-    };
+    analysis::MoveAssessment move;
+    move.ply = value.at("ply").as_size();
+    move.move_number = value.get("move_number", move.ply / 2 + 1).as_size();
+    move.side = value.get("side", move.ply % 2 == 0 ? "white" : "black").as_string();
+    move.san = value.get("san", value.get("played_san", "")).as_string();
+    move.played_san = value.get("played_san", move.san).as_string();
+    move.played_uci = value.get("played_uci", "").as_string();
+    move.fen_before = value.at("fen_before").as_string();
+    move.fen_after = value.at("fen_after").as_string();
+    move.best_uci = value.get("best_uci", "").as_string();
+    move.best_san = value.get("best_san", "").as_string();
+    move.evaluation_before = value.at("evaluation_before").as_int();
+    move.evaluation_after = value.at("evaluation_after").as_int();
+    move.evaluation_after_best =
+        value.get("evaluation_after_best", move.evaluation_before).as_int();
+    const chess::Color perspective =
+        move.side == "black" ? chess::Color::Black : chess::Color::White;
+    move.expected_points_before = value.get(
+        "expected_points_before", analysis::expected_points(move.evaluation_before, perspective))
+                                      .as_number();
+    move.expected_points_after = value.get(
+        "expected_points_after", analysis::expected_points(move.evaluation_after, perspective))
+                                     .as_number();
+    move.expected_points_loss = value.get(
+        "expected_points_loss",
+        std::max(0.0, move.expected_points_before - move.expected_points_after))
+                                    .as_number();
+    move.loss = value.get("loss", 0).as_int();
+    move.material_delta = value.get("material_delta", 0).as_int();
+    const std::string quality =
+        value.get("classification", value.get("quality", "good")).as_string();
+    move.quality = parse_quality(quality);
+    move.classification_state = parse_classification_state(
+        value.get("classification_state", "final").as_string());
+    move.classification_reasons = string_array(value, "classification_reasons");
+    move.tactical_tags = string_array(value, "tactical_tags");
+    if (quality == "developing" || quality == "capture" || quality == "check" ||
+        quality == "recapture" || quality == "threat") {
+        move.tactical_tags.push_back(quality == "developing" ? "development" : quality);
+        move.classification_reasons.push_back(
+            "legacy tactical label migrated to a secondary tag; quality defaults to good");
+    } else if (quality == "neutral") {
+        move.classification_reasons.push_back(
+            "legacy neutral label migrated to good because it was not an outcome classification");
+    }
+    move.principal_variation = string_array(value, "principal_variation");
+    move.acceptable_alternatives = string_array(value, "acceptable_alternatives");
+    move.book_source = value.get("book_source", "").as_string();
+    move.book_version = value.get("book_version", "").as_string();
+    move.depth = value.get("depth", 0).as_int();
+    move.nodes = static_cast<std::uint64_t>(value.get("nodes", 0).as_number());
+    move.time_ms = static_cast<std::uint64_t>(value.get("time_ms", 0).as_number());
+    move.multipv = value.get("multipv", 0).as_int();
+    move.engine_version = value.get("engine_version", "legacy-unreported").as_string();
+    move.classification_model_version =
+        value.get("classification_model_version", "legacy-fixed-cp-thresholds").as_string();
+    move.expected_points_model_version =
+        value.get("expected_points_model_version", "legacy-derived-on-read").as_string();
+    move.phase = parse_phase(value.get("phase", "middlegame").as_string());
+    move.best_response = value.get("best_response", "").as_string();
+    return move;
 }
 
 json::Value mistake_json(const analysis::Mistake& mistake) {
@@ -685,7 +833,10 @@ void Repository::replay() {
         }
     }
     for (const storage::Event& event : events.events) {
-        if (event.id <= snapshot_event_id)
+        if (event.id <= snapshot_event_id &&
+            event.type != storage::EventType::VariationSaved &&
+            event.type != storage::EventType::VariationDeleted &&
+            event.type != storage::EventType::ReviewAttempted)
             continue;
         try {
             const json::Value payload = json::parse(event.payload);
@@ -767,6 +918,31 @@ void Repository::replay() {
                     checkpoint.username + "\n" + checkpoint.month, std::move(checkpoint));
             } else if (event.type == storage::EventType::ChessComSyncStateChanged) {
                 chesscom_sync_state_ = sync_state_from_json(payload);
+            } else if (event.type == storage::EventType::VariationSaved) {
+                Variation variation = variation_from_json(payload);
+                if (variation.id.starts_with("variation-")) {
+                    try {
+                        next_variation_id_ = std::max(
+                            next_variation_id_,
+                            static_cast<std::uint64_t>(std::stoull(variation.id.substr(10))) + 1);
+                    } catch (const std::exception&) {
+                        // Non-sequential imported identifiers remain valid and do not affect allocation.
+                    }
+                }
+                variations_.insert_or_assign(variation.id, std::move(variation));
+            } else if (event.type == storage::EventType::VariationDeleted) {
+                variations_.erase(payload.at("id").as_string());
+            } else if (event.type == storage::EventType::ReviewAttempted) {
+                ReviewAttempt attempt;
+                attempt.id = static_cast<std::uint64_t>(payload.at("id").as_number());
+                attempt.game_id = payload.at("game_id").as_string();
+                attempt.ply = payload.at("ply").as_size();
+                attempt.uci = payload.at("uci").as_string();
+                attempt.accepted = payload.at("accepted").as_bool();
+                attempt.attempted_at_ms = static_cast<std::int64_t>(
+                    payload.at("attempted_at_ms").as_number());
+                next_review_attempt_id_ = std::max(next_review_attempt_id_, attempt.id + 1);
+                review_attempts_.push_back(std::move(attempt));
             }
         } catch (const Error& error) {
             log(LogLevel::Warning, "repository",
@@ -1851,6 +2027,177 @@ ChessComSyncState Repository::chesscom_sync_state() const {
     return chesscom_sync_state_;
 }
 
+Variation Repository::create_variation(std::string_view game_id, std::size_t root_ply,
+                                       std::string root_position) {
+    std::lock_guard lock(mutex_);
+    const auto game = games_.find(std::string(game_id));
+    if (game == games_.end())
+        throw Error(ErrorCode::NotFound, "game does not exist");
+    if (root_ply >= game->second.imported.game.plies.size())
+        throw Error(ErrorCode::InvalidArgument, "variation root ply is outside the game");
+    if (root_position != "before" && root_position != "after")
+        throw Error(ErrorCode::InvalidArgument, "variation root position must be before or after");
+    const auto& ply = game->second.imported.game.plies[root_ply];
+    Variation variation;
+    variation.id = "variation-" + std::to_string(next_variation_id_++);
+    variation.game_id = std::string(game_id);
+    variation.root_ply = root_ply;
+    variation.root_position = std::move(root_position);
+    variation.root_fen = variation.root_position == "before" ? ply.fen_before : ply.fen_after;
+    variation.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    variation.nodes.emplace(0, VariationNode{0, -1, {}, {}, variation.root_fen, {}});
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(variation)));
+    variations_.emplace(variation.id, variation);
+    note_applied_event(event);
+    return variation;
+}
+
+Variation Repository::extend_variation(std::string_view variation_id, std::uint64_t node_id,
+                                       std::string_view move_uci) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        throw Error(ErrorCode::NotFound, "variation does not exist");
+    Variation updated = found->second;
+    const auto parent = updated.nodes.find(node_id);
+    if (parent == updated.nodes.end())
+        throw Error(ErrorCode::NotFound, "variation node does not exist");
+    chess::Board board = chess::Board::from_fen(parent->second.fen);
+    const auto move = parse_uci(board, move_uci);
+    if (!move)
+        throw Error(ErrorCode::IllegalMove, "move is not legal in the variation position");
+    const std::string canonical_uci = chess::uci(*move);
+    for (const std::uint64_t child_id : parent->second.children) {
+        const auto child = updated.nodes.find(child_id);
+        if (child != updated.nodes.end() && child->second.uci == canonical_uci) {
+            updated.current_node_id = child_id;
+            updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::system_clock::now().time_since_epoch())
+                                        .count();
+            const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                                     json::dump(to_json(updated)));
+            found->second = updated;
+            note_applied_event(event);
+            return updated;
+        }
+    }
+    const std::string san = chess::to_san(board, *move);
+    board.make_move(*move);
+    const std::uint64_t child_id = updated.next_node_id++;
+    updated.nodes.emplace(child_id, VariationNode{child_id, static_cast<std::int64_t>(node_id),
+                                                   canonical_uci, san, board.to_fen(), {}});
+    updated.nodes.at(node_id).children.push_back(child_id);
+    updated.current_node_id = child_id;
+    updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(updated)));
+    found->second = updated;
+    note_applied_event(event);
+    return updated;
+}
+
+Variation Repository::set_variation_cursor(std::string_view variation_id,
+                                           std::uint64_t node_id) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        throw Error(ErrorCode::NotFound, "variation does not exist");
+    if (!found->second.nodes.contains(node_id))
+        throw Error(ErrorCode::NotFound, "variation node does not exist");
+    Variation updated = found->second;
+    updated.current_node_id = node_id;
+    updated.updated_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+    const storage::Event event = log_.append(storage::EventType::VariationSaved,
+                                             json::dump(to_json(updated)));
+    found->second = updated;
+    note_applied_event(event);
+    return updated;
+}
+
+Variation Repository::reset_variation(std::string_view variation_id) {
+    return set_variation_cursor(variation_id, 0);
+}
+
+std::optional<Variation> Repository::variation(std::string_view variation_id) const {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    return found == variations_.end() ? std::nullopt : std::optional<Variation>{found->second};
+}
+
+std::vector<Variation> Repository::variations(std::string_view game_id) const {
+    std::lock_guard lock(mutex_);
+    std::vector<Variation> result;
+    for (const auto& [_, variation] : variations_)
+        if (variation.game_id == game_id)
+            result.push_back(variation);
+    return result;
+}
+
+bool Repository::delete_variation(std::string_view variation_id) {
+    std::lock_guard lock(mutex_);
+    const auto found = variations_.find(std::string(variation_id));
+    if (found == variations_.end())
+        return false;
+    const storage::Event event = log_.append(
+        storage::EventType::VariationDeleted,
+        json::dump(json::Value::Object{{"id", std::string(variation_id)},
+                                       {"game_id", found->second.game_id}}));
+    variations_.erase(found);
+    note_applied_event(event);
+    return true;
+}
+
+ReviewAttempt Repository::record_review_attempt(std::string_view game_id, std::size_t ply,
+                                                 std::string_view uci) {
+    std::lock_guard lock(mutex_);
+    const auto game = games_.find(std::string(game_id));
+    if (game == games_.end())
+        throw Error(ErrorCode::NotFound, "game does not exist");
+    if (!game->second.analysis || ply >= game->second.analysis->moves.size() ||
+        ply >= game->second.imported.game.plies.size())
+        throw Error(ErrorCode::InvalidArgument, "review attempt requires an analyzed move");
+    chess::Board board = chess::Board::from_fen(game->second.imported.game.plies[ply].fen_before);
+    const auto move = parse_uci(board, uci);
+    if (!move)
+        throw Error(ErrorCode::IllegalMove, "move is not legal in the retry position");
+    const std::string canonical = chess::uci(*move);
+    const auto& assessment = game->second.analysis->moves[ply];
+    const bool accepted = canonical == assessment.best_uci ||
+                          std::find(assessment.acceptable_alternatives.begin(),
+                                    assessment.acceptable_alternatives.end(), canonical) !=
+                              assessment.acceptable_alternatives.end();
+    ReviewAttempt attempt;
+    attempt.id = next_review_attempt_id_++;
+    attempt.game_id = std::string(game_id);
+    attempt.ply = ply;
+    attempt.uci = canonical;
+    attempt.accepted = accepted;
+    attempt.attempted_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    const storage::Event event = log_.append(storage::EventType::ReviewAttempted,
+                                             json::dump(to_json(attempt)));
+    review_attempts_.push_back(attempt);
+    note_applied_event(event);
+    return attempt;
+}
+
+std::vector<ReviewAttempt> Repository::review_attempts(std::string_view game_id) const {
+    std::lock_guard lock(mutex_);
+    std::vector<ReviewAttempt> result;
+    for (const auto& attempt : review_attempts_)
+        if (attempt.game_id == game_id)
+            result.push_back(attempt);
+    return result;
+}
+
 void Repository::rebuild_indexes() const {
     json::Value::Array games;
     json::Value::Array positions;
@@ -1989,6 +2336,46 @@ void Repository::rebuild_indexes() const {
                                     {"entries", std::move(chesscom_archive)}});
 }
 
+json::Value to_json(const Variation& variation) {
+    json::Value::Array nodes;
+    for (const auto& [_, node] : variation.nodes) {
+        json::Value::Array children;
+        for (const std::uint64_t child : node.children)
+            children.emplace_back(static_cast<std::size_t>(child));
+        nodes.emplace_back(json::Value::Object{
+            {"id", static_cast<std::size_t>(node.id)},
+            {"parent_id", static_cast<double>(node.parent_id)},
+            {"uci", node.uci},
+            {"san", node.san},
+            {"fen", node.fen},
+            {"children", std::move(children)},
+        });
+    }
+    return json::Value::Object{
+        {"id", variation.id},
+        {"game_id", variation.game_id},
+        {"root_ply", variation.root_ply},
+        {"root_position", variation.root_position},
+        {"root_fen", variation.root_fen},
+        {"current_node_id", static_cast<std::size_t>(variation.current_node_id)},
+        {"next_node_id", static_cast<std::size_t>(variation.next_node_id)},
+        {"engine_configuration", variation.engine_configuration},
+        {"updated_at_ms", static_cast<double>(variation.updated_at_ms)},
+        {"nodes", std::move(nodes)},
+    };
+}
+
+json::Value to_json(const ReviewAttempt& attempt) {
+    return json::Value::Object{
+        {"id", static_cast<std::size_t>(attempt.id)},
+        {"game_id", attempt.game_id},
+        {"ply", attempt.ply},
+        {"uci", attempt.uci},
+        {"accepted", attempt.accepted},
+        {"attempted_at_ms", static_cast<double>(attempt.attempted_at_ms)},
+    };
+}
+
 json::Value to_json(const chess::Game& game) {
     json::Value::Array plies;
     for (std::size_t index = 0; index < game.plies.size(); ++index) {
@@ -2032,6 +2419,11 @@ json::Value to_json(const analysis::GameAnalysis& analysis) {
         {"departure_ply", analysis.departure_ply ? json::Value(*analysis.departure_ply)
                                                    : json::Value{}},
         {"opening_book_version", analysis.opening_book_version},
+        {"accuracy", analysis.accuracy},
+        {"white_accuracy", analysis.white_accuracy},
+        {"black_accuracy", analysis.black_accuracy},
+        {"accuracy_sample_size", analysis.accuracy_sample_size},
+        {"accuracy_version", analysis.accuracy_version},
     };
 }
 
@@ -2074,6 +2466,11 @@ analysis::GameAnalysis analysis_from_json(const json::Value& value) {
         result.departure_ply = departure.as_size();
     result.opening_book_version =
         value.get("opening_book_version", "legacy").as_string();
+    result.accuracy = value.get("accuracy", 0.0).as_number();
+    result.white_accuracy = value.get("white_accuracy", 0.0).as_number();
+    result.black_accuracy = value.get("black_accuracy", 0.0).as_number();
+    result.accuracy_sample_size = value.get("accuracy_sample_size", 0).as_size();
+    result.accuracy_version = value.get("accuracy_version", "legacy").as_string();
     return result;
 }
 

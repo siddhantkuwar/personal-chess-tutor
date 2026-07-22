@@ -51,7 +51,10 @@ TEST_CASE("API imports PGN and returns navigable game data immediately") {
     });
     const auto imported = fixture.api.handle(service::Request{"POST", "/api/import", {}, body});
     CHECK_EQ(imported.status, 202);
-    const std::string id = json::parse(imported.body).at("game_id").as_string();
+    const auto imported_body = json::parse(imported.body);
+    CHECK(!imported_body.as_object().contains("job"));
+    CHECK(fixture.jobs.list().empty());
+    const std::string id = imported_body.at("game_id").as_string();
     const auto game = fixture.api.handle(service::Request{"GET", "/api/games/" + id, {}, {}});
     CHECK_EQ(game.status, 200);
     CHECK_EQ(json::parse(game.body).at("game").at("plies").as_array().size(), 2ULL);
@@ -59,6 +62,117 @@ TEST_CASE("API imports PGN and returns navigable game data immediately") {
         fixture.api.handle(service::Request{"GET", "/api/games/" + id + "/moves/0", {}, {}});
     CHECK_EQ(move.status, 200);
     CHECK_EQ(json::parse(move.body).at("san").as_string(), "e4");
+}
+
+TEST_CASE("API variation contract validates moves and preserves sibling branches") {
+    ApiFixture fixture;
+    const std::string import_body = json::dump(json::Value::Object{
+        {"pgn", "[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 1-0"},
+    });
+    const auto imported = fixture.api.handle(
+        service::Request{"POST", "/api/import", {}, import_body});
+    const std::string game_id = json::parse(imported.body).at("game_id").as_string();
+    const std::string base = "/api/games/" + game_id + "/variations";
+
+    const auto created = fixture.api.handle(service::Request{
+        "POST", base, {},
+        json::dump(json::Value::Object{{"root_ply", 0}, {"root_position", "after"}})});
+    CHECK_EQ(created.status, 201);
+    const auto created_body = json::parse(created.body);
+    const std::string variation_id = created_body.at("id").as_string();
+    CHECK_EQ(created_body.at("root_position").as_string(), "after");
+    CHECK_EQ(created_body.at("nodes").as_array().size(), 1ULL);
+
+    const auto initial = fixture.api.handle(service::Request{
+        "POST", base, {},
+        json::dump(json::Value::Object{{"root_ply", 0}, {"root_position", "before"}})});
+    CHECK_EQ(initial.status, 201);
+    const auto initial_body = json::parse(initial.body);
+    CHECK_EQ(initial_body.at("root_position").as_string(), "before");
+    const std::string initial_path = base + "/" + initial_body.at("id").as_string();
+    const auto initial_move = fixture.api.handle(service::Request{
+        "POST", initial_path + "/moves", {},
+        json::dump(json::Value::Object{{"node_id", 0}, {"uci", "d2d4"}})});
+    CHECK_EQ(initial_move.status, 200);
+    CHECK_EQ(json::parse(initial_move.body).at("nodes").as_array().size(), 2ULL);
+
+    const std::string variation_path = base + "/" + variation_id;
+    const auto first = fixture.api.handle(service::Request{
+        "POST", variation_path + "/moves", {},
+        json::dump(json::Value::Object{{"node_id", 0}, {"uci", "e7e5"}})});
+    CHECK_EQ(first.status, 200);
+    CHECK_EQ(json::parse(first.body).at("nodes").as_array().size(), 2ULL);
+    const auto branch_analysis = fixture.api.handle(
+        service::Request{"POST", variation_path + "/analysis", {}, "{}"});
+    CHECK_EQ(branch_analysis.status, 200);
+    CHECK(!json::parse(branch_analysis.body).at("best_move").as_string().empty());
+    CHECK_EQ(json::parse(branch_analysis.body).at("lines").as_array().size(), 1ULL);
+
+    const auto reset = fixture.api.handle(
+        service::Request{"POST", variation_path + "/reset", {}, "{}"});
+    CHECK_EQ(reset.status, 200);
+    CHECK_EQ(json::parse(reset.body).at("current_node_id").as_size(), 0ULL);
+    const auto sibling = fixture.api.handle(service::Request{
+        "POST", variation_path + "/moves", {},
+        json::dump(json::Value::Object{{"node_id", 0}, {"uci", "c7c5"}})});
+    CHECK_EQ(sibling.status, 200);
+    const auto sibling_body = json::parse(sibling.body);
+    CHECK_EQ(sibling_body.at("nodes").as_array().size(), 3ULL);
+    CHECK_EQ(sibling_body.at("nodes").as_array().front().at("children").as_array().size(), 2ULL);
+
+    const auto illegal = fixture.api.handle(service::Request{
+        "POST", variation_path + "/moves", {},
+        json::dump(json::Value::Object{{"node_id", 0}, {"uci", "e2e4"}})});
+    CHECK_EQ(illegal.status, 400);
+    CHECK_EQ(json::parse(illegal.body).at("code").as_string(), "illegal_move");
+
+    const auto listed = fixture.api.handle(service::Request{"GET", base, {}, {}});
+    CHECK_EQ(listed.status, 200);
+    CHECK_EQ(json::parse(listed.body).at("variations").as_array().size(), 2ULL);
+    CHECK_EQ(fixture.api.handle(service::Request{"GET", variation_path, {}, {}}).status, 200);
+    CHECK_EQ(fixture.api.handle(service::Request{"DELETE", variation_path, {}, {}}).status, 200);
+    CHECK_EQ(fixture.api.handle(service::Request{"GET", variation_path, {}, {}}).status, 404);
+}
+
+TEST_CASE("API retry contract validates and persists analyzed move attempts") {
+    ApiFixture fixture;
+    const std::string import_body = json::dump(json::Value::Object{
+        {"pgn", "[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 1-0"},
+    });
+    const auto imported = fixture.api.handle(
+        service::Request{"POST", "/api/import", {}, import_body});
+    const std::string game_id = json::parse(imported.body).at("game_id").as_string();
+    const auto stored = fixture.repository.get(game_id);
+    CHECK(stored.has_value());
+    analysis::GameAnalysis completed;
+    completed.game_id = game_id;
+    analysis::MoveAssessment move;
+    move.ply = 0;
+    move.played_uci = "e2e4";
+    move.best_uci = "e2e4";
+    move.acceptable_alternatives = {"d2d4"};
+    move.fen_before = stored->imported.game.plies[0].fen_before;
+    move.fen_after = stored->imported.game.plies[0].fen_after;
+    completed.moves.push_back(move);
+    fixture.repository.save_analysis(completed);
+
+    const std::string retry_path = "/api/games/" + game_id + "/moves/0/retry";
+    const auto accepted = fixture.api.handle(service::Request{
+        "POST", retry_path, {}, json::dump(json::Value::Object{{"uci", "d2d4"}})});
+    CHECK_EQ(accepted.status, 201);
+    CHECK(json::parse(accepted.body).at("accepted").as_bool());
+    const auto legal_other = fixture.api.handle(service::Request{
+        "POST", retry_path, {}, json::dump(json::Value::Object{{"uci", "a2a3"}})});
+    CHECK_EQ(legal_other.status, 201);
+    CHECK(!json::parse(legal_other.body).at("accepted").as_bool());
+    const auto illegal = fixture.api.handle(service::Request{
+        "POST", retry_path, {}, json::dump(json::Value::Object{{"uci", "e7e5"}})});
+    CHECK_EQ(illegal.status, 400);
+    CHECK_EQ(json::parse(illegal.body).at("code").as_string(), "illegal_move");
+    const auto attempts = fixture.api.handle(service::Request{
+        "GET", "/api/games/" + game_id + "/retry-attempts", {}, {}});
+    CHECK_EQ(attempts.status, 200);
+    CHECK_EQ(json::parse(attempts.body).at("attempts").as_array().size(), 2ULL);
 }
 
 TEST_CASE("API validates request shape and unknown resources") {

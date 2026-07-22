@@ -244,6 +244,10 @@ std::size_t JobManager::queued_count() const {
     return queued_count_unlocked();
 }
 
+engine::AnalysisResult JobManager::analyze_variation_position(std::string_view fen) {
+    return analyzer_.analyze_position(fen, {}, engine::AnalysisPriority::Historical);
+}
+
 bool JobManager::runnable_unlocked() const {
     if (!queues_[0].empty() || !queues_[1].empty())
         return true;

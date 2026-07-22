@@ -164,7 +164,10 @@ TEST_CASE("legacy manual PGN import remains compatible while remote URL returns 
         "POST", "/api/import",
         json::Value::Object{{"pgn", "[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 1-0"}}));
     CHECK_EQ(manual.status, 202);
-    CHECK(json::parse(manual.body).as_object().contains("game_id"));
+    const auto manual_body = json::parse(manual.body);
+    CHECK(manual_body.as_object().contains("game_id"));
+    CHECK(!manual_body.as_object().contains("job"));
+    CHECK(fixture.jobs.list().empty());
 
     const auto remote = fixture.api.handle(json_request(
         "POST", "/api/import",
@@ -188,10 +191,13 @@ TEST_CASE("cached URL import accepts current Chess.com generic Site PGN") {
         "POST", "/api/import",
         json::Value::Object{{"url", "https://www.chess.com/game/live/" + id}}));
     CHECK_EQ(imported.status, 202);
-    CHECK_EQ(json::parse(imported.body).at("status").as_string(), "imported");
+    const auto imported_body = json::parse(imported.body);
+    CHECK_EQ(imported_body.at("status").as_string(), "imported");
+    CHECK(!imported_body.as_object().contains("job"));
+    CHECK(fixture.jobs.list().empty());
 }
 
-TEST_CASE("WebSocket lifecycle rejects non-loopback Origin and stop wakes the sole socket owner") {
+TEST_CASE("HTTP and WebSocket lifecycle reject non-loopback browser authorities") {
     ChessComApiFixture fixture;
     service::HttpServer server(fixture.api, fixture.jobs, service::ServerOptions{0, {}},
                                &fixture.ingest);
@@ -207,6 +213,40 @@ TEST_CASE("WebSocket lifecycle rejects non-loopback Origin and stop wakes the so
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
     const std::uint16_t port = server.bound_port();
+    const int rejected_http_origin = port == 0 ? -1 : connect_loopback(port);
+    std::string rejected_http_origin_response;
+    if (rejected_http_origin >= 0) {
+        const std::string request =
+            "POST /api/import HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
+            "\r\nOrigin: https://evil.example\r\nContent-Type: text/plain\r\n"
+            "Content-Length: 2\r\nConnection: close\r\n\r\n{}";
+        static_cast<void>(send(rejected_http_origin, request.data(), request.size(), 0));
+        rejected_http_origin_response = receive_available(rejected_http_origin);
+        close(rejected_http_origin);
+    }
+
+    const int rejected_http_host = port == 0 ? -1 : connect_loopback(port);
+    std::string rejected_http_host_response;
+    if (rejected_http_host >= 0) {
+        const std::string request =
+            "GET /api/health HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n";
+        static_cast<void>(send(rejected_http_host, request.data(), request.size(), 0));
+        rejected_http_host_response = receive_available(rejected_http_host);
+        close(rejected_http_host);
+    }
+
+    const int accepted_http = port == 0 ? -1 : connect_loopback(port);
+    std::string accepted_http_response;
+    if (accepted_http >= 0) {
+        const std::string request =
+            "GET /api/health HTTP/1.1\r\nHost: localhost:" + std::to_string(port) +
+            "\r\nOrigin: http://localhost:" + std::to_string(port) +
+            "\r\nConnection: close\r\n\r\n";
+        static_cast<void>(send(accepted_http, request.data(), request.size(), 0));
+        accepted_http_response = receive_available(accepted_http);
+        close(accepted_http);
+    }
+
     const int rejected = port == 0 ? -1 : connect_loopback(port);
     std::string rejected_response;
     if (rejected >= 0) {
@@ -238,6 +278,12 @@ TEST_CASE("WebSocket lifecycle rejects non-loopback Origin and stop wakes the so
     server_thread.join();
 
     CHECK(port != 0);
+    CHECK(rejected_http_origin >= 0);
+    CHECK(rejected_http_origin_response.starts_with("HTTP/1.1 403 Forbidden"));
+    CHECK(rejected_http_host >= 0);
+    CHECK(rejected_http_host_response.starts_with("HTTP/1.1 403 Forbidden"));
+    CHECK(accepted_http >= 0);
+    CHECK(accepted_http_response.starts_with("HTTP/1.1 200 OK"));
     CHECK(rejected >= 0);
     CHECK(rejected_response.starts_with("HTTP/1.1 403 Forbidden"));
     CHECK(accepted >= 0);

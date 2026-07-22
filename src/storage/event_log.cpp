@@ -309,6 +309,7 @@ std::size_t EventLog::compact(const std::function<void(CompactionStage)>& stage_
     std::set<std::string> completed_analyses;
     std::set<std::string> shallow_analyses;
     std::set<std::string> chesscom_months;
+    std::set<std::string> variations;
     bool kept_snapshot = false;
     bool kept_queue_state = false;
     bool kept_migration = false;
@@ -357,6 +358,11 @@ std::size_t EventLog::compact(const std::function<void(CompactionStage)>& stage_
                 const std::string key = payload.at("username").as_string() + "\n" +
                                         payload.at("month").as_string();
                 keep = chesscom_months.insert(key).second;
+            } else if (iterator->type == EventType::VariationSaved ||
+                       iterator->type == EventType::VariationDeleted) {
+                const std::string variation_id =
+                    json::parse(iterator->payload).at("id").as_string();
+                keep = variations.insert(variation_id).second;
             } else if (iterator->type == EventType::LogCompacted) {
                 keep = false;
             }
@@ -468,6 +474,9 @@ std::string_view name(EventType type) {
     case EventType::ChessComArchiveChunkIndexed: return "ChessComArchiveChunkIndexed";
     case EventType::ChessComMonthCheckpointed: return "ChessComMonthCheckpointed";
     case EventType::ChessComSyncStateChanged: return "ChessComSyncStateChanged";
+    case EventType::VariationSaved: return "VariationSaved";
+    case EventType::VariationDeleted: return "VariationDeleted";
+    case EventType::ReviewAttempted: return "ReviewAttempted";
     }
     return "Unknown";
 }
